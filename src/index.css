@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════
+   Design Token Override — Tailwind v4 @theme
+   Maps Tailwind color utilities to the unified design system.
+   Components keep existing class names; only palette values change.
+═══════════════════════════════════════════════════════════════ */
+@theme {
+  /* Primary — Deep Navy (replaces indigo) */
+  --color-indigo-50:  #EEF2FF;
+  --color-indigo-100: #E0E7FF;
+  --color-indigo-200: #C7D2FE;
+  --color-indigo-300: #A5B4FC;
+  --color-indigo-400: #5B7FD4;
+  --color-indigo-500: #3D5FC0;
+  --color-indigo-600: #1F3A8A;
+  --color-indigo-700: #1A306F;
+  --color-indigo-800: #152659;
+  --color-indigo-900: #101C45;
+
+  /* Background / Surface (slate override for app shell) */
+  --color-slate-50:  #F6F7F9;
+  --color-slate-100: #F1F5F9;
+  --color-slate-200: #E2E8F0;
+  --color-slate-300: #CBD5E1;
+  --color-slate-400: #94A3B8;
+  --color-slate-500: #64748B;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1E293B;
+  --color-slate-900: #0F172A;
+
+  /* Accent — Subtle Gold (amber override) */
+  --color-amber-400: #E8B354;
+  --color-amber-500: #D9A441;
+  --color-amber-600: #C8922F;
+  --color-amber-700: #A8771E;
+
+  /* Status colors (unchanged) */
+  --color-emerald-600: #16A34A;
+  --color-red-600:     #DC2626;
+  --color-sky-500:     #0EA5E9;
+  --color-orange-500:  #F97316;
+
+  /* Card shadow radius */
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.06);
+  --radius-card: 12px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Semantic CSS variables (available everywhere via var())
+═══════════════════════════════════════════════════════════════ */
+:root {
+  --bg:          #F6F7F9;
+  --surface:     #FFFFFF;
+  --surface-2:   #F1F5F9;
+  --text:        #0F172A;
+  --muted:       #64748B;
+  --border:      #E2E8F0;
+  --primary:     #1F3A8A;
+  --primary-hover: #1A306F;
+  --accent:      #D9A441;
+  --accent-hover: #C8922F;
+  --success:     #16A34A;
+  --warning:     #F97316;
+  --danger:      #DC2626;
+  --info:        #0EA5E9;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Dark Mode — toggle .dark on <html> to activate
+═══════════════════════════════════════════════════════════════ */
+html.dark {
+  color-scheme: dark;
+
+  /* Semantic variables */
+  --bg:            #0F172A;
+  --surface:       #1E293B;
+  --surface-2:     #293548;
+  --text:          #F1F5F9;
+  --muted:         #94A3B8;
+  --border:        #334155;
+  --primary:       #6B8DD6;
+  --primary-hover: #8AAAE8;
+  --shadow-card:   0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* Override Tailwind slate tokens for all bg-slate-* / text-slate-* utilities */
+  --color-white:     #1E293B;
+  --color-slate-50:  #1E293B;
+  --color-slate-100: #293548;
+  --color-slate-200: #3D4F68;
+  --color-slate-300: #526482;
+  --color-slate-400: #8099B4;
+  --color-slate-500: #A8BECF;
+  --color-slate-600: #C8D9E8;
+  --color-slate-700: #E0EAF2;
+  --color-slate-800: #F0F5FA;
+  --color-slate-900: #F8FAFC;
+
+  /* Indigo adjustments for dark backgrounds */
+  --color-indigo-50:  #1E2D5E;
+  --color-indigo-100: #253578;
+  --color-indigo-600: #6B8DD6;
+  --color-indigo-700: #8AAAE8;
+}
+
+/* Explicit fallback for bg-white (some browsers may not cascade CSS vars for literals) */
+html.dark .bg-white            { background-color: #1E293B; }
+html.dark .border-white        { border-color: #3D4F68; }
+html.dark [class*="shadow-xl"] { box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+html.dark [class*="shadow-md"] { box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+html.dark [class*="shadow-sm"] { box-shadow: 0 2px 8px  rgba(0,0,0,0.3); }
+
+/* ═══════════════════════════════════════════════════════════════
+   Global base
+═══════════════════════════════════════════════════════════════ */
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', 'Tahoma', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Arabic font shaping fallback */
+:lang(ar) {
+  font-family: 'Segoe UI', 'Tahoma', 'Arial', system-ui, sans-serif;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Print styles — clean report output (PDF / window.print)
+═══════════════════════════════════════════════════════════════ */
+@media print {
+  aside,
+  .no-print {
+    display: none !important;
+  }
+
+  main {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  .print-break-inside {
+    break-inside: avoid;
+  }
+}

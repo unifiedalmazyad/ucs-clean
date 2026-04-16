@@ -1,0 +1,82 @@
+services:
+
+  # ── Application ────────────────────────────────────────────────────
+  app:
+    container_name: unified_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Bound to localhost only — host Nginx proxies contract.maz-safety.com → 127.0.0.1:3010
+    ports:
+      - "127.0.0.1:3010:3000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - unified_uploads:/app/uploads
+    networks:
+      - unified_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── PostgreSQL 15 ──────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: unified_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-unified_db}
+      POSTGRES_USER:     ${POSTGRES_USER:-unified_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - unified_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-unified_user} -d ${POSTGRES_DB:-unified_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - unified_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  unified_net:
+    name: unified_net
+
+volumes:
+  unified_postgres_data:
+    name: unified_postgres_data
+  unified_uploads:
+    name: unified_uploads
+
+# ══════════════════════════════════════════════════════════════════════
+#  FIRST DEPLOY — step by step
+# ══════════════════════════════════════════════════════════════════════
+#
+#  1. Copy and fill environment variables:
+#       cp .env.example .env && nano .env
+#
+#  2. Build and start:
+#       docker compose up -d --build
+#
+#  3. Seed the database (once — idempotent, safe to re-run):
+#       docker compose exec app sh -c "psql \$DATABASE_URL -f /app/seed.sql"
+#
+#  4. Verify the app is healthy:
+#       curl http://localhost:3010/api/health
+#       # → {"status":"ok","db":"connected"}
+#
+#  5. Change ALL default passwords immediately after first login:
+#       Admin panel → Users → edit each account
+#
+# ══════════════════════════════════════════════════════════════════════

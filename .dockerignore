@@ -1,0 +1,43 @@
+# Dependencies (reinstalled inside Docker)
+node_modules/
+
+# Built output (rebuilt inside Docker)
+dist/
+build/
+
+# Dev/test artifacts
+*.log
+npm-debug.log*
+coverage/
+
+# Git & IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Replit-specific
+.replit
+.replit_integration_files
+.local/
+.agents/
+.cache/
+.config/
+.upm/
+metadata.json
+
+# Attached assets and documentation
+attached_assets/
+
+# Secrets (must never enter the image)
+.env
+.env.*
+!.env.example
+
+# Deployment configs mounted at runtime (not needed inside the image)
+nginx.conf
+
+# Misc
+README.md
+replit.md
+script/
