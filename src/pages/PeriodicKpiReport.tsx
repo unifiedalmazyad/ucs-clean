@@ -1588,12 +1588,6 @@ export default function PeriodicKpiReport() {
                     <span className="text-xs font-medium text-indigo-600">{lang === 'en' ? 'Partially Billed' : 'مفوتر جزئياً'}</span>
                   </div>
                 )}
-                {summary.billingCounts.notFullyBilled > 0 && (
-                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 shadow-sm">
-                    <span className="text-xl font-bold text-amber-700">{summary.billingCounts.notFullyBilled}</span>
-                    <span className="text-xs font-medium text-amber-600">{lang === 'en' ? 'Not Fully Collected' : 'غير مُحصَّل كاملاً'}</span>
-                  </div>
-                )}
               </div>
             )}
 
