@@ -11,6 +11,7 @@ const en = {
   'nav.reports':          'Reports',
   'nav.reportCenter':     'Report Center',
   'nav.periodic':         'Periodic Performance',
+  'nav.contracts':        'Contracts',
   'nav.executive':        'Executive Dashboard',
   'nav.users':            'Users',
   'nav.regions':          'Regions',

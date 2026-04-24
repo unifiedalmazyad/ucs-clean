@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { 
+import {
   LayoutDashboard, ClipboardList, Settings, LogOut,
   ChevronRight, ChevronLeft, Menu, X, Users, Map,
   Layers, Columns, ShieldCheck, Sliders,
   FileSpreadsheet, ArrowUpDown, Activity, PieChart, Plug, Download, ScrollText, BookMarked,
-  Moon, Sun,
+  Moon, Sun, FileText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLang } from '../contexts/LangContext';
@@ -40,6 +40,10 @@ export default function Sidebar() {
 
   if (user.canViewExecutiveDashboard || user.role === 'ADMIN') {
     menuItems.splice(1, 0, { path: '/dashboard/executive', labelKey: 'nav.executive', icon: PieChart });
+  }
+
+  if (user.canViewContracts || user.role === 'ADMIN') {
+    menuItems.push({ path: '/contracts', labelKey: 'nav.contracts', icon: FileText });
   }
 
   if (user.role === 'ADMIN') {

@@ -15,6 +15,7 @@ import executiveDashboardRoutes from './routes/executiveDashboard';
 import integrationsRoutes from './routes/integrations';
 import exportCenterRoutes from './routes/exportCenter';
 import auditLogRoutes from './routes/auditLog';
+import contractRoutes from './routes/contracts';
 import { authenticate } from './middleware/auth';
 import { eq, or, sql } from 'drizzle-orm';
 import multer from 'multer';
@@ -92,6 +93,7 @@ async function startServer() {
   app.use('/api/integrations', integrationsRoutes);
   app.use('/api/export-center', exportCenterRoutes);
   app.use('/api/audit-logs', auditLogRoutes);
+  app.use('/api/contracts',  contractRoutes);
 
   // ── Local File Storage ───────────────────────────────────────────────────────
   // Files are stored at UPLOAD_DIR (default: <cwd>/uploads)

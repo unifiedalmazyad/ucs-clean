@@ -132,7 +132,9 @@ router.post('/login', async (req, res) => {
         canViewExecutiveDashboard: roleDef?.canViewExecutiveDashboard || false,
         canViewExecKpiCards: roleDef?.canViewExecKpiCards !== false,
         canViewFinKpiCards:  roleDef?.canViewFinKpiCards  !== false,
-        canManageTargets:    isAdmin ? true : (roleDef?.canManageTargets ?? false),
+        canManageTargets:    isAdmin ? true : (roleDef?.canManageTargets    ?? false),
+        canViewContracts:    isAdmin ? true : (roleDef?.canViewContracts    ?? false),
+        canManageContracts:  isAdmin ? true : (roleDef?.canManageContracts  ?? false),
       },
     });
   } catch (err) {
@@ -165,7 +167,9 @@ router.get('/me', authenticate, async (req: AuthRequest, res) => {
       canViewExecutiveDashboard: roleDef?.canViewExecutiveDashboard || false,
       canViewExecKpiCards: roleDef?.canViewExecKpiCards !== false,
       canViewFinKpiCards:  roleDef?.canViewFinKpiCards  !== false,
-      canManageTargets:    isAdminMe ? true : (roleDef?.canManageTargets ?? false),
+      canManageTargets:    isAdminMe ? true : (roleDef?.canManageTargets   ?? false),
+      canViewContracts:    isAdminMe ? true : (roleDef?.canViewContracts   ?? false),
+      canManageContracts:  isAdminMe ? true : (roleDef?.canManageContracts ?? false),
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user data' });

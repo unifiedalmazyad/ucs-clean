@@ -11,6 +11,7 @@ const ar = {
   'nav.reports':          'التقارير',
   'nav.reportCenter':     'مركز التقارير',
   'nav.periodic':         'الأداء الدوري',
+  'nav.contracts':        'العقود',
   'nav.executive':        'لوحة الإدارة التنفيذية',
   'nav.users':            'المستخدمين',
   'nav.regions':          'المناطق',

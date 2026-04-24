@@ -39,4 +39,6 @@ export const {
   reportTemplates,
   integrations,
   sectorAnnualTargets,
+  contracts,
+  contractAttachments,
 } = schema as any;

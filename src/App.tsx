@@ -24,6 +24,7 @@ import Integrations from './pages/Integrations';
 import ExportCenter from './pages/ExportCenter';
 import AuditLog from './pages/AuditLog';
 import SystemSettings from './pages/SystemSettings';
+import Contracts from './pages/Contracts';
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
   const token = localStorage.getItem('token');
@@ -81,6 +82,7 @@ function AppRoutes() {
       <Route path="/export-center"          element={<Layout><ExportCenter /></Layout>} />
       <Route path="/audit-log"              element={<Layout><AuditLog /></Layout>} />
       <Route path="/admin/system-settings"  element={<Layout><SystemSettings /></Layout>} />
+      <Route path="/contracts"              element={<Layout><Contracts /></Layout>} />
       <Route path="/"                        element={<Navigate to="/dashboard" />} />
     </Routes>
   );

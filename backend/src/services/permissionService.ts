@@ -74,6 +74,7 @@ export const DRIZZLE_WO_COLS = new Set([
   'drillingDate', 'shutdownDate', 'procedure', 'holdReason',
   'materialSheetDate', 'checkSheetsDate', 'meteringSheetDate',
   'gisCompletionDate', 'proc155CloseDate', 'completionCertConfirm',
+  'completionCertDate', 'invoiceBillingDate', 'invoice2BillingDate', 'financialCloseDate', 'invoice2Number',
   'estimatedValue', 'invoiceNumber', 'actualInvoiceValue', 'invoiceType',
   'invoice1', 'invoice2', 'collectedAmount', 'remainingAmount',
   'execDelayJustified', 'execDelayReason', 'finDelayJustified', 'finDelayReason',
@@ -148,6 +149,12 @@ export async function filterInput(input: any, userId: string, role: string, tabl
   // for backward-compatible reads via filterOutput.
   const dynamicFiltered: any = {};
 
+  // Track which camelPhys keys were already set by a camelCase input key.
+  // This prevents a stale snake_case key from the JSONB merge (returned by
+  // filterOutput for backward-compat) from overwriting the authoritative
+  // camelCase value that the frontend set via handleChange.
+  const setViaCamelKey = new Set<string>();
+
   Object.keys(input).forEach(inputKey => {
     // Always allow system/workflow fields not in catalog
     if (ALWAYS_WRITABLE_CAMEL.has(inputKey)) {
@@ -173,7 +180,14 @@ export async function filterInput(input: any, userId: string, role: string, tabl
       const physKey = (colDef as any)?.physicalKey || snakeKey;
       const camelPhys = toCamel(physKey);
 
+      const isCamelInput = writableCamel.has(inputKey) && inputKey === camelPhys;
+
       if (DRIZZLE_WO_COLS.has(camelPhys)) {
+        // If a camelCase key already set this field, skip the snake_case duplicate.
+        // This avoids stale JSONB values (returned as snake_case for backward-compat)
+        // overwriting the fresh camelCase value sent by the edit form.
+        if (!isCamelInput && setViaCamelKey.has(camelPhys)) return;
+        if (isCamelInput) setViaCamelKey.add(camelPhys);
         // Known Drizzle schema column → write via ORM
         coreFiltered[camelPhys] = input[inputKey];
       } else {

@@ -350,3 +350,26 @@ export const roleDefinitions = sqliteTable('role_definitions', {
   sortOrder: integer('sort_order').default(0),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
+
+// ─── Contracts stubs (demo mode — PostgreSQL only for production) ─────────────
+export const contracts = sqliteTable('contracts', {
+  id:             text('id').primaryKey(),
+  sectorId:       text('sector_id').notNull(),
+  contractNumber: text('contract_number').notNull(),
+  startDate:      text('start_date').notNull(),
+  endDate:        text('end_date').notNull(),
+  notes:          text('notes'),
+  archivedAt:     text('archived_at'),
+  createdBy:      text('created_by'),
+  createdAt:      text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt:      text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const contractAttachments = sqliteTable('contract_attachments', {
+  id:         text('id').primaryKey(),
+  contractId: text('contract_id').notNull(),
+  userId:     text('user_id'),
+  name:       text('name').notNull(),
+  url:        text('url').notNull(),
+  createdAt:  text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});

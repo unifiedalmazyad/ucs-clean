@@ -70,9 +70,10 @@ export const workOrders = pgTable('work_orders', {
   proc155CloseDate: timestamp('proc_155_close_date'), // تاريخ اقفال اجراء 155
   completionCertConfirm: boolean('completion_cert_confirm'), // تأكيد شهادة إنجاز
   completionCertDate: timestamp('completion_cert_date'),   // تاريخ شهادة الإنجاز
-  invoiceBillingDate: timestamp('invoice_billing_date'),   // تاريخ إصدار الفاتورة
-  financialCloseDate: timestamp('financial_close_date'),   // تاريخ الإغلاق المالي
-  invoice2Number: text('invoice_2_number'),                // رقم المستخلص الثاني
+  invoiceBillingDate:  timestamp('invoice_billing_date'),    // تاريخ إصدار الفاتورة 1
+  invoice2BillingDate: timestamp('invoice_2_billing_date'),  // تاريخ إصدار الفاتورة 2
+  financialCloseDate:  timestamp('financial_close_date'),    // تاريخ الإغلاق المالي
+  invoice2Number: text('invoice_2_number'),                  // رقم المستخلص الثاني
   estimatedValue: numeric('estimated_value'), // القيمة التقديرية
   invoiceNumber: text('invoice_number'), // رقم المستخلص
   actualInvoiceValue: numeric('actual_invoice_value'), // القيمة الفعلية للفاتورة
@@ -103,8 +104,10 @@ export const workOrders = pgTable('work_orders', {
   currentRequestType:       text('current_request_type'),
 
   // Region / Sector
-  regionId: uuid('region_id').references(() => regions.id),
-  sectorId: uuid('sector_id').references(() => sectors.id),
+  regionId:   uuid('region_id').references(() => regions.id),
+  sectorId:   uuid('sector_id').references(() => sectors.id),
+  // Contract — system-managed, never written by users directly
+  contractId: uuid('contract_id').references(() => contracts.id, { onDelete: 'set null' }),
 
   // Metadata
   status: text('status').default('PENDING'),
@@ -283,6 +286,8 @@ export const roleDefinitions = pgTable('role_definitions', {
   canViewFinKpiCards:       boolean('can_view_fin_kpi_cards').default(true),
   canViewPeriodicReport:    boolean('can_view_periodic_report').default(false),
   canManageTargets:         boolean('can_manage_targets').default(false),
+  canViewContracts:         boolean('can_view_contracts').default(false),
+  canManageContracts:       boolean('can_manage_contracts').default(false),
   isSystem: boolean('is_system').default(false),
   active: boolean('active').default(true),
   sortOrder: integer('sort_order').default(0),
@@ -508,6 +513,31 @@ export const executiveSectorTargets = pgTable('executive_sector_targets', {
   financialInvoicingTarget: numeric('financial_invoicing_target'),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
   updatedBy: text('updated_by'),
+});
+
+// ─── Contracts (عقود القطاعات) ───────────────────────────────────────────────
+// Overlap prevention is enforced at API level AND via DB exclusion constraint in migration SQL.
+// contract_id on work_orders is system-managed only — never written directly by users.
+export const contracts = pgTable('contracts', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  sectorId:       uuid('sector_id').notNull().references(() => sectors.id),
+  contractNumber: text('contract_number').notNull(),
+  startDate:      date('start_date').notNull(),
+  endDate:        date('end_date').notNull(),
+  notes:          text('notes'),
+  archivedAt:     timestamp('archived_at'),           // null = active, set = archived (soft delete)
+  createdBy:      uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt:      timestamp('created_at').defaultNow().notNull(),
+  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const contractAttachments = pgTable('contract_attachments', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  contractId: uuid('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+  userId:     uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  name:       text('name').notNull(),
+  url:        text('url').notNull(),
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
 });
 
 // مستهدفات القطاعات بالنسبة المئوية (النظام الجديد)

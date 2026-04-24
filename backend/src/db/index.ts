@@ -293,6 +293,18 @@ if (isDemo) {
   pool.query(`ALTER TABLE stages ADD COLUMN IF NOT EXISTS name_en TEXT;`)
     .catch(() => {});
 
+  // Columns added in schema_pg.ts after initial deployment — guard for fresh DBs
+  // and any host where these were not yet applied via manual ALTER.
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS completion_cert_date TIMESTAMPTZ;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS invoice_billing_date TIMESTAMPTZ;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS invoice_2_number TEXT;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS street_category TEXT;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS soil_type TEXT;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS expected_excavation_date TIMESTAMPTZ;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS classified TEXT;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS current_request_number TEXT;`).catch(() => {});
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS current_request_type TEXT;`).catch(() => {});
+
   // Create column_categories table if not exists + seed EXEC and FIN
   pool.query(`
     CREATE TABLE IF NOT EXISTS column_categories (
@@ -365,6 +377,18 @@ if (isDemo) {
   pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS fin_delay_justified BOOLEAN DEFAULT false;`).catch(() => {});
   pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS fin_delay_reason TEXT;`).catch(() => {});
   pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_status_classification TEXT;`).catch(() => {});
+  // Seed work_status_classification options (only if none exist yet)
+  pool.query(`
+    INSERT INTO column_options (id, column_key, value, label_ar, sort_order, active)
+    SELECT gen_random_uuid(), v.col_key, v.val, v.lbl, v.ord, true
+    FROM (VALUES
+      ('work_status_classification', 'قائم',      'قائم',      1),
+      ('work_status_classification', 'تم التنفيذ', 'تم التنفيذ', 2)
+    ) AS v(col_key, val, lbl, ord)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM column_options WHERE column_key = 'work_status_classification'
+    );
+  `).catch(() => {});
   // Register delay + classification columns in column_catalog
   pool.query(`
     INSERT INTO column_catalog (id, table_name, column_key, physical_key, label_ar, label_en, group_key, category, data_type, is_sensitive, is_custom, is_enabled, show_in_create, sort_order)
@@ -380,6 +404,110 @@ if (isDemo) {
           physical_key = EXCLUDED.physical_key,
           sort_order  = EXCLUDED.sort_order;
   `).catch(e => console.warn('[MIGRATION] delay cols catalog:', e?.message ?? e));
+
+  // Register financial_close_date in column_catalog (FINANCE group, sort_order 900)
+  pool.query(`
+    INSERT INTO column_catalog (id, table_name, column_key, physical_key, label_ar, label_en, group_key, category, data_type, is_sensitive, is_custom, is_enabled, show_in_create, sort_order)
+    VALUES (gen_random_uuid(), 'work_orders', 'financial_close_date', 'financial_close_date',
+            'تاريخ الإغلاق المالي', 'Financial Close Date',
+            'FINANCE', 'FIN', 'date', false, false, true, false, 900)
+    ON CONFLICT (table_name, column_key) DO UPDATE
+      SET label_ar     = EXCLUDED.label_ar,
+          label_en     = EXCLUDED.label_en,
+          group_key    = EXCLUDED.group_key,
+          category     = EXCLUDED.category,
+          data_type    = EXCLUDED.data_type,
+          physical_key = EXCLUDED.physical_key,
+          is_custom    = false,
+          is_enabled   = true,
+          sort_order   = EXCLUDED.sort_order;
+  `).catch(e => console.warn('[MIGRATION] financial_close_date catalog:', e?.message ?? e));
+
+  // Register permissions for financial_close_date — ADMIN/MANAGER/FINANCE can write, others read-only
+  pool.query(`
+    INSERT INTO role_column_permissions (role, table_name, column_key, can_read, can_write)
+    VALUES
+      ('ADMIN',       'work_orders', 'financial_close_date', true, true),
+      ('MANAGER',     'work_orders', 'financial_close_date', true, true),
+      ('OPERATOR',    'work_orders', 'financial_close_date', true, false),
+      ('COORDINATOR', 'work_orders', 'financial_close_date', true, false),
+      ('GIS',         'work_orders', 'financial_close_date', true, false),
+      ('FINANCE',     'work_orders', 'financial_close_date', true, true),
+      ('VIEWER',      'work_orders', 'financial_close_date', true, false)
+    ON CONFLICT (role, table_name, column_key) DO UPDATE
+      SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write;
+  `).catch(e => console.warn('[MIGRATION] financial_close_date perms:', e?.message ?? e));
+
+  // Register invoice_billing_date in column_catalog (FINANCE group, sort_order 900)
+  // The physical column was added earlier (line ~299) but catalog/perms were never created.
+  pool.query(`
+    INSERT INTO column_catalog (id, table_name, column_key, physical_key, label_ar, label_en, group_key, category, data_type, is_sensitive, is_custom, is_enabled, show_in_create, sort_order)
+    VALUES (gen_random_uuid(), 'work_orders', 'invoice_billing_date', 'invoice_billing_date',
+            'تاريخ الفوترة 1', 'Invoice 1 Billing Date',
+            'FINANCE', 'FIN', 'date', false, false, true, false, 900)
+    ON CONFLICT (table_name, column_key) DO UPDATE
+      SET label_ar     = EXCLUDED.label_ar,
+          label_en     = EXCLUDED.label_en,
+          group_key    = EXCLUDED.group_key,
+          category     = EXCLUDED.category,
+          data_type    = EXCLUDED.data_type,
+          physical_key = EXCLUDED.physical_key,
+          is_custom    = false,
+          is_enabled   = true,
+          sort_order   = EXCLUDED.sort_order;
+  `).catch(e => console.warn('[MIGRATION] invoice_billing_date catalog:', e?.message ?? e));
+
+  // Permissions for invoice_billing_date — same policy as invoice_2_billing_date
+  pool.query(`
+    INSERT INTO role_column_permissions (role, table_name, column_key, can_read, can_write)
+    VALUES
+      ('ADMIN',       'work_orders', 'invoice_billing_date', true, true),
+      ('MANAGER',     'work_orders', 'invoice_billing_date', true, true),
+      ('OPERATOR',    'work_orders', 'invoice_billing_date', true, false),
+      ('COORDINATOR', 'work_orders', 'invoice_billing_date', true, false),
+      ('GIS',         'work_orders', 'invoice_billing_date', true, false),
+      ('FINANCE',     'work_orders', 'invoice_billing_date', true, true),
+      ('VIEWER',      'work_orders', 'invoice_billing_date', true, false)
+    ON CONFLICT (role, table_name, column_key) DO UPDATE
+      SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write;
+  `).catch(e => console.warn('[MIGRATION] invoice_billing_date perms:', e?.message ?? e));
+
+  // Add physical column invoice_2_billing_date
+  pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS invoice_2_billing_date TIMESTAMPTZ;`)
+    .catch(e => console.warn('[MIGRATION] invoice_2_billing_date column:', e?.message ?? e));
+
+  // Register invoice_2_billing_date in column_catalog (FINANCE group, sort_order 901)
+  pool.query(`
+    INSERT INTO column_catalog (id, table_name, column_key, physical_key, label_ar, label_en, group_key, category, data_type, is_sensitive, is_custom, is_enabled, show_in_create, sort_order)
+    VALUES (gen_random_uuid(), 'work_orders', 'invoice_2_billing_date', 'invoice_2_billing_date',
+            'تاريخ الفوترة 2', 'Invoice 2 Billing Date',
+            'FINANCE', 'FIN', 'date', false, false, true, false, 901)
+    ON CONFLICT (table_name, column_key) DO UPDATE
+      SET label_ar     = EXCLUDED.label_ar,
+          label_en     = EXCLUDED.label_en,
+          group_key    = EXCLUDED.group_key,
+          category     = EXCLUDED.category,
+          data_type    = EXCLUDED.data_type,
+          physical_key = EXCLUDED.physical_key,
+          is_custom    = false,
+          is_enabled   = true,
+          sort_order   = EXCLUDED.sort_order;
+  `).catch(e => console.warn('[MIGRATION] invoice_2_billing_date catalog:', e?.message ?? e));
+
+  // Register permissions for invoice_2_billing_date — ADMIN/MANAGER/FINANCE can write, others read-only
+  pool.query(`
+    INSERT INTO role_column_permissions (role, table_name, column_key, can_read, can_write)
+    VALUES
+      ('ADMIN',       'work_orders', 'invoice_2_billing_date', true, true),
+      ('MANAGER',     'work_orders', 'invoice_2_billing_date', true, true),
+      ('OPERATOR',    'work_orders', 'invoice_2_billing_date', true, false),
+      ('COORDINATOR', 'work_orders', 'invoice_2_billing_date', true, false),
+      ('GIS',         'work_orders', 'invoice_2_billing_date', true, false),
+      ('FINANCE',     'work_orders', 'invoice_2_billing_date', true, true),
+      ('VIEWER',      'work_orders', 'invoice_2_billing_date', true, false)
+    ON CONFLICT (role, table_name, column_key) DO UPDATE
+      SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write;
+  `).catch(e => console.warn('[MIGRATION] invoice_2_billing_date perms:', e?.message ?? e));
 
   // Register completion_cert_date in column_catalog (PROCEDURE_155 group, sort_order 408)
   pool.query(`
@@ -427,43 +555,9 @@ if (isDemo) {
   `).catch(e => console.warn('[MIGRATION] work_status_classification perms:', e?.message ?? e));
 
   // ── Migrate existing isCustom=true catalog columns → real physical columns ──
-  // These columns were previously stored only in custom_fields JSONB. Now each
-  // gets an actual ALTER TABLE column, data is copied out, and is_custom is set
-  // to FALSE so they behave identically to core columns everywhere.
-  (async () => {
-    const CUSTOM_MIGRATION: { key: string; sqlType: string }[] = [
-      { key: 'survey_notes',               sqlType: 'TEXT' },
-      { key: 'excavation_completion_date', sqlType: 'TIMESTAMPTZ' },
-      { key: 'electrical_team',            sqlType: 'TEXT' },
-      { key: 'd9_no',                      sqlType: 'TEXT' },
-      { key: 'execution_notes',            sqlType: 'TEXT' },
-      { key: 'financial_close_date',       sqlType: 'TIMESTAMPTZ' },
-    ];
-    for (const { key, sqlType } of CUSTOM_MIGRATION) {
-      try {
-        // 1. Add physical column (idempotent)
-        await pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS "${key}" ${sqlType};`);
-        // 2. Copy data from custom_fields JSONB → physical column (only where physical is NULL)
-        const castSuffix = sqlType === 'TIMESTAMPTZ' ? `::TIMESTAMPTZ` : '';
-        await pool.query(`
-          UPDATE work_orders
-          SET "${key}" = (custom_fields->>'${key}')${castSuffix}
-          WHERE (custom_fields->>'${key}') IS NOT NULL
-            AND "${key}" IS NULL;
-        `);
-        // 3. Fix catalog: is_custom = FALSE, physical_key = column_key
-        await pool.query(`
-          UPDATE column_catalog
-          SET is_custom = FALSE, physical_key = '${key}'
-          WHERE column_key = '${key}';
-        `);
-      } catch (err: any) {
-        // Non-fatal: column may already exist or catalog row may be absent
-        console.warn(`[MIGRATION] custom→physical for "${key}":`, err?.message ?? err);
-      }
-    }
-    console.log('[MIGRATION] custom→physical columns done.');
-  })().catch(e => console.error('[MIGRATION] custom→physical failed:', e));
+  // DISABLED for first production deployment — enable after verifying JSONB data
+  // on prod server and taking a DB backup. See DEV_SETUP.md for instructions.
+  // (async () => { ... })();
 
   // Backfill stage_id for orders imported before stageId mapping was added
   (async () => {
@@ -640,6 +734,68 @@ if (isDemo) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `).catch(() => {});
+
+  // Contracts system migration
+  (async () => {
+    try {
+      // Extension for overlap exclusion constraint
+      await pool.query(`CREATE EXTENSION IF NOT EXISTS btree_gist`);
+
+      // Contracts table
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS contracts (
+          id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          sector_id    UUID NOT NULL REFERENCES sectors(id) ON DELETE RESTRICT,
+          contract_number TEXT NOT NULL,
+          start_date   DATE NOT NULL,
+          end_date     DATE NOT NULL,
+          notes        TEXT,
+          archived_at  TIMESTAMPTZ,
+          created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT contracts_dates_check CHECK (end_date >= start_date)
+        )
+      `);
+
+      // Overlap exclusion constraint (only for active contracts)
+      await pool.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'contracts_no_overlap'
+          ) THEN
+            ALTER TABLE contracts ADD CONSTRAINT contracts_no_overlap
+              EXCLUDE USING gist (sector_id WITH =, daterange(start_date, end_date, '[]') WITH &&)
+              WHERE (archived_at IS NULL);
+          END IF;
+        END $$
+      `);
+
+      // Contract attachments table
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS contract_attachments (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+          user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+          name        TEXT NOT NULL,
+          url         TEXT NOT NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      // contract_id column on work_orders
+      await pool.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS contract_id UUID REFERENCES contracts(id) ON DELETE SET NULL`);
+
+      // Permission columns on role_definitions
+      await pool.query(`ALTER TABLE role_definitions ADD COLUMN IF NOT EXISTS can_view_contracts BOOLEAN NOT NULL DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE role_definitions ADD COLUMN IF NOT EXISTS can_manage_contracts BOOLEAN NOT NULL DEFAULT FALSE`);
+      await pool.query(`UPDATE role_definitions SET can_view_contracts = TRUE, can_manage_contracts = TRUE WHERE role_key = 'ADMIN'`);
+
+      console.log('[MIGRATION] contracts tables ready.');
+    } catch (err: any) {
+      console.warn('[MIGRATION] contracts setup:', err?.message ?? err);
+    }
+  })();
 
   console.log("PostgreSQL database initialized.");
 }

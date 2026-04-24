@@ -25,6 +25,9 @@ interface RoleDef {
   canViewExecKpiCards: boolean;
   canViewFinKpiCards:  boolean;
   canViewPeriodicReport: boolean;
+  canManageTargets?: boolean;
+  canViewContracts?: boolean;
+  canManageContracts?: boolean;
   isSystem: boolean;
   active: boolean;
   sortOrder: number;
@@ -380,7 +383,7 @@ export default function RoleManagement() {
                       {lang === 'en' ? 'Role Information' : 'معلومات الدور'}
                     </h3>
                     {!editing ? (
-                      <button data-testid="button-edit-role" onClick={() => { setEditing(true); setEditForm({ nameAr: selected.nameAr, nameEn: selected.nameEn, scopeType: selected.scopeType, active: selected.active, canCreateOrder: selected.canCreateOrder, canDeleteOrder: selected.canDeleteOrder, canEditExecution: selected.canEditExecution, canViewExcavationPermits: selected.canViewExcavationPermits, canEditExcavationPermits: selected.canEditExcavationPermits, canDeleteExcavationPermits: selected.canDeleteExcavationPermits, canViewExecutiveDashboard: selected.canViewExecutiveDashboard, canViewExecKpiCards: selected.canViewExecKpiCards !== false, canViewFinKpiCards: selected.canViewFinKpiCards !== false, canViewPeriodicReport: selected.canViewPeriodicReport ?? false, canManageTargets: selected.canManageTargets ?? false }); }}
+                      <button data-testid="button-edit-role" onClick={() => { setEditing(true); setEditForm({ nameAr: selected.nameAr, nameEn: selected.nameEn, scopeType: selected.scopeType, active: selected.active, canCreateOrder: selected.canCreateOrder, canDeleteOrder: selected.canDeleteOrder, canEditExecution: selected.canEditExecution, canViewExcavationPermits: selected.canViewExcavationPermits, canEditExcavationPermits: selected.canEditExcavationPermits, canDeleteExcavationPermits: selected.canDeleteExcavationPermits, canViewExecutiveDashboard: selected.canViewExecutiveDashboard, canViewExecKpiCards: selected.canViewExecKpiCards !== false, canViewFinKpiCards: selected.canViewFinKpiCards !== false, canViewPeriodicReport: selected.canViewPeriodicReport ?? false, canManageTargets: selected.canManageTargets ?? false, canViewContracts: selected.canViewContracts ?? false, canManageContracts: selected.canManageContracts ?? false }); }}
                         className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50">
                         <Pencil size={13}/> {lang === 'en' ? 'Edit' : 'تعديل'}
                       </button>
@@ -462,7 +465,9 @@ export default function RoleManagement() {
                       { key: 'canViewExecKpiCards', labelAr: 'بطاقات الجانب التنفيذي', labelEn: 'Executive KPI Cards', descAr: 'يعرض بطاقات الجانب التنفيذي في صفحة أوامر العمل', descEn: 'Show Executive KPI cards in Work Orders page' },
                       { key: 'canViewFinKpiCards',  labelAr: 'بطاقات الجانب المالي',   labelEn: 'Financial KPI Cards',  descAr: 'يعرض بطاقات الجانب المالي في صفحة أوامر العمل',   descEn: 'Show Financial KPI cards in Work Orders page' },
                       { key: 'canViewPeriodicReport', labelAr: 'تقرير الأداء الدوري', labelEn: 'Periodic KPI Report', descAr: 'يمكنه الوصول إلى صفحة تقرير الأداء الدوري', descEn: 'Can access the Periodic KPI Report page' },
-                      { key: 'canManageTargets', labelAr: 'تعيين المستهدفات السنوية', labelEn: 'Manage Annual Targets', descAr: 'يمكنه تعديل المستهدفات السنوية التنفيذية والمالية في لوحة الإدارة التنفيذية', descEn: 'Can set and edit annual executive & financial targets in the executive dashboard' },
+                      { key: 'canManageTargets',   labelAr: 'تعيين المستهدفات السنوية', labelEn: 'Manage Annual Targets',   descAr: 'يمكنه تعديل المستهدفات السنوية التنفيذية والمالية في لوحة الإدارة التنفيذية', descEn: 'Can set and edit annual executive & financial targets in the executive dashboard' },
+                      { key: 'canViewContracts',   labelAr: 'عرض العقود',               labelEn: 'View Contracts',           descAr: 'يمكنه الوصول إلى صفحة العقود وعرض تفاصيلها', descEn: 'Can access the Contracts page and view contract details' },
+                      { key: 'canManageContracts', labelAr: 'إدارة العقود',             labelEn: 'Manage Contracts',         descAr: 'يمكنه إضافة وتعديل وأرشفة العقود وتشغيل إعادة الربط', descEn: 'Can add, edit, archive contracts and run re-linking' },
                     ].map(opt => {
                       const val = editing ? (editForm as any)[opt.key] ?? (selected as any)[opt.key] : (selected as any)[opt.key];
                       return (
