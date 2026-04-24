@@ -80,7 +80,7 @@ EXPOSE 3000
 
 # Health check — waits up to 40 s for startup, then polls every 30 s
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health 2>/dev/null || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null || exit 1
 
 # dumb-init as PID 1 → correctly handles SIGTERM from `docker stop`
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
