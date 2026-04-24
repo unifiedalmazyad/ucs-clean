@@ -9,6 +9,7 @@ import {
 } from '../db/schema_pg';
 import { authenticate } from '../middleware/auth';
 import type { AuthRequest } from '../middleware/auth';
+import { filterOutput } from '../services/permissionService';
 
 const router = Router();
 
@@ -28,6 +29,9 @@ const DATE_COL_MAP: Record<string, any> = {
   gis_completion_date:  workOrders.gisCompletionDate,
   proc_155_close_date:   workOrders.proc155CloseDate,
   completion_cert_date:  workOrders.completionCertDate,
+  financial_close_date:    workOrders.financialCloseDate,
+  invoice_billing_date:    workOrders.invoiceBillingDate,
+  invoice_2_billing_date:  workOrders.invoice2BillingDate,
 };
 
 // ── physicalKeyMap: columnKey → physicalKey (from column_catalog) ─────────────
@@ -110,6 +114,18 @@ function resolveDate(
 type WOStatus = 'COMPLETED' | 'CANCELLED' | 'OVERDUE' | 'WARNING' | 'ON_TIME' | 'UNKNOWN';
 type FinStatus = 'COMPLETED' | 'OVERDUE' | 'WARNING' | 'ON_TIME';
 
+// Single general status per work order — priority order (highest wins):
+// CANCELLED > FIN_COMPLETED > FIN_OVERDUE > FIN_WARNING > FIN_ON_TIME
+//           > EXEC_COMPLETED > EXEC_OVERDUE > EXEC_WARNING > EXEC_ON_TIME > UNKNOWN
+// Financial statuses only apply once execution is complete.
+// When finEnabled=false, EXEC_COMPLETED is the terminal "done" state.
+type GeneralStatus =
+  | 'CANCELLED'
+  | 'FIN_COMPLETED' | 'FIN_OVERDUE' | 'FIN_WARNING' | 'FIN_ON_TIME'
+  | 'EXEC_COMPLETED'
+  | 'EXEC_OVERDUE'  | 'EXEC_WARNING' | 'EXEC_ON_TIME'
+  | 'UNKNOWN';
+
 function computeExecStatus(wo: any, rule: any, stageMap: Map<string, any>, now: Date, physicalKeyMap?: Map<string, string>): WOStatus {
   const stage = stageMap.get(wo.stageId ?? '');
   if (stage?.isCancelled) return 'CANCELLED';
@@ -132,6 +148,35 @@ function computeFinStatus(wo: any, execRule: any, finRule: any, stageMap: Map<st
   if (days > finRule.slaDays) return 'OVERDUE';
   if (days >= finRule.slaDays - finRule.warningDays) return 'WARNING';
   return 'ON_TIME';
+}
+
+// Assigns a single GeneralStatus to a work order using the priority chain above.
+// Each WO belongs to exactly one category — no double-counting possible.
+function computeGeneralStatus(
+  wo: any,
+  execRule: any,
+  finRule: any | null,
+  finEnabled: boolean,
+  stageMap: Map<string, any>,
+  now: Date,
+  physicalKeyMap?: Map<string, string>,
+): GeneralStatus {
+  const execStatus = computeExecStatus(wo, execRule, stageMap, now, physicalKeyMap);
+  if (execStatus === 'CANCELLED') return 'CANCELLED';
+  if (execStatus === 'COMPLETED') {
+    if (finEnabled && finRule) {
+      const fs = computeFinStatus(wo, execRule, finRule, stageMap, now, physicalKeyMap);
+      if (fs === 'COMPLETED') return 'FIN_COMPLETED';
+      if (fs === 'OVERDUE')   return 'FIN_OVERDUE';
+      if (fs === 'WARNING')   return 'FIN_WARNING';
+      if (fs === 'ON_TIME')   return 'FIN_ON_TIME';
+    }
+    return 'EXEC_COMPLETED';
+  }
+  if (execStatus === 'OVERDUE')  return 'EXEC_OVERDUE';
+  if (execStatus === 'WARNING')  return 'EXEC_WARNING';
+  if (execStatus === 'ON_TIME')  return 'EXEC_ON_TIME';
+  return 'UNKNOWN';
 }
 
 function getDays(wo: any, rule: any, stageMap: Map<string, any>, now: Date, physicalKeyMap?: Map<string, string>): number | null {
@@ -295,9 +340,11 @@ const WO_FIELDS = {
   // Financial
   invoiceNumber: workOrders.invoiceNumber,
   invoiceType: workOrders.invoiceType,
-  invoiceBillingDate: workOrders.invoiceBillingDate,
+  invoiceBillingDate:  workOrders.invoiceBillingDate,
+  invoice2BillingDate: workOrders.invoice2BillingDate,
   invoice1: workOrders.invoice1,
   invoice2: workOrders.invoice2,
+  invoice2Number: workOrders.invoice2Number,
   holdReason: workOrders.holdReason,
   procedure: workOrders.procedure,
   createdAt: workOrders.createdAt,
@@ -350,33 +397,80 @@ async function fetchWOs(opts: FetchOpts) {
 }
 
 interface Counts {
-  total: number; active: number; completed: number; cancelled: number;
-  overdue: number; warning: number; onTime: number; unconfigured: number;
+  total: number; active: number; cancelled: number; unconfigured: number;
+  // ── General status counts (main card values — each WO counted exactly once) ──
+  completed: number; overdue: number; warning: number; onTime: number;
+  // ── Exec phase breakdown (informational only) ─────────────────────────────────
+  execCompleted: number; execOverdue: number; execWarning: number; execOnTime: number;
+  // ── Fin phase breakdown (informational only, always 0 when fin disabled) ──────
+  finCompleted: number; finOverdue: number; finWarning: number; finOnTime: number;
+  finActiveTotal: number; // WOs that have entered the financial phase
 }
+
 const zeroCounts = (): Counts => ({
-  total: 0, active: 0, completed: 0, cancelled: 0, overdue: 0, warning: 0, onTime: 0, unconfigured: 0,
+  total: 0, active: 0, cancelled: 0, unconfigured: 0,
+  completed: 0, overdue: 0, warning: 0, onTime: 0,
+  execCompleted: 0, execOverdue: 0, execWarning: 0, execOnTime: 0,
+  finCompleted: 0, finOverdue: 0, finWarning: 0, finOnTime: 0,
+  finActiveTotal: 0,
 });
 
+// aggregateCounts — each WO is assigned exactly one GeneralStatus and counted
+// in exactly one bucket. No WO can appear in both exec and fin totals.
+// finRule / finEnabled are optional for callers that do not track finance.
 function aggregateCounts(
   wos: any[], ruleMap: Map<string, any>, stageMap: Map<string, any>, now: Date,
   includeCancelled = false, includeCompleted = true,
   physicalKeyMap?: Map<string, string>,
+  finRule: any | null = null,
+  finEnabled = false,
 ): Counts & { totalDays: number; daysCount: number } {
   const r = { ...zeroCounts(), totalDays: 0, daysCount: 0 };
   for (const wo of wos) {
     const rule = ruleMap.get(wo.projectType ?? '');
     if (!rule) { r.total++; r.unconfigured++; continue; }
-    const status = computeExecStatus(wo, rule, stageMap, now, physicalKeyMap);
-    if (status === 'CANCELLED') {
+
+    const gs = computeGeneralStatus(wo, rule, finRule, finEnabled, stageMap, now, physicalKeyMap);
+
+    // CANCELLED — only counted when includeCancelled is enabled
+    if (gs === 'CANCELLED') {
       if (includeCancelled) { r.total++; r.cancelled++; }
       continue;
     }
-    if (status === 'COMPLETED' && !includeCompleted) continue;
+
+    // "Fully completed" means the WO is done under the current configuration:
+    //   • finEnabled=true  → FIN_COMPLETED
+    //   • finEnabled=false → EXEC_COMPLETED
+    // EXEC_COMPLETED with finEnabled=true means exec is done but fin is tracked
+    // (still active financially) — it must NOT be skipped by includeCompleted.
+    const isFullyCompleted =
+      gs === 'FIN_COMPLETED' || (gs === 'EXEC_COMPLETED' && !finEnabled);
+    if (isFullyCompleted && !includeCompleted) continue;
+
     r.total++;
-    if (status === 'COMPLETED') { r.completed++; r.active++; }
-    else if (status === 'OVERDUE')  { r.overdue++;  r.active++; }
-    else if (status === 'WARNING')  { r.warning++;  r.active++; }
-    else if (status === 'ON_TIME')  { r.onTime++;   r.active++; }
+    r.active++;
+
+    switch (gs) {
+      // ── Financial phase (exec already complete) ──────────────────────────────
+      case 'FIN_COMPLETED':
+        r.completed++;  r.finCompleted++;  r.finActiveTotal++;  r.execCompleted++;  break;
+      case 'FIN_OVERDUE':
+        r.overdue++;    r.finOverdue++;    r.finActiveTotal++;  r.execCompleted++;  break;
+      case 'FIN_WARNING':
+        r.warning++;    r.finWarning++;    r.finActiveTotal++;  r.execCompleted++;  break;
+      case 'FIN_ON_TIME':
+        r.onTime++;     r.finOnTime++;     r.finActiveTotal++;  r.execCompleted++;  break;
+      // ── Exec phase (execution not yet complete) ───────────────────────────────
+      case 'EXEC_COMPLETED':
+        r.completed++;  r.execCompleted++;  break;
+      case 'EXEC_OVERDUE':
+        r.overdue++;    r.execOverdue++;    break;
+      case 'EXEC_WARNING':
+        r.warning++;    r.execWarning++;    break;
+      case 'EXEC_ON_TIME':
+        r.onTime++;     r.execOnTime++;     break;
+    }
+
     const days = getDays(wo, rule, stageMap, now, physicalKeyMap);
     if (days !== null) { r.totalDays += days; r.daysCount++; }
   }
@@ -384,22 +478,54 @@ function aggregateCounts(
 }
 
 // ── KPI alerts: مغلقة لم تُفوتر + فُوتر بلا شهادة إنجاز ─────────────────────
-function computeKpiAlerts(wos: any[]): { closedNotInvoiced: number; invoicedNoCert: number } {
-  let closedNotInvoiced = 0;
-  let invoicedNoCert    = 0;
+function computeKpiAlerts(wos: any[]): {
+  closedNotInvoiced: number; invoicedNoCert: number;
+  closedNotInvoicedValue: number; invoicedNoCertValue: number;
+  completedWithCert: number; completedWithCertValue: number;
+} {
+  let closedNotInvoiced      = 0;
+  let invoicedNoCert         = 0;
+  let closedNotInvoicedValue = 0;
+  let invoicedNoCertValue    = 0;
+  let completedWithCert      = 0;
+  let completedWithCertValue = 0;
+
   for (const wo of wos) {
-    const hasFinClose       = !!(wo.financialCloseDate);
-    const hasInvoice        = !!(wo.invoiceNumber);
-    const hasBillingDate    = !!(wo.invoiceBillingDate);
-    const hasCertDate       = !!(wo.completionCertDate);
+    const hasProc155    = !!(wo.proc155CloseDate);
+    const isCancelled   = (wo.status ?? '').toUpperCase() === 'CANCELLED';
+    const inv1Val       = parseFloat(wo.invoice1 ?? wo.invoice_1 ?? '0') || 0;
+    const inv2Val       = parseFloat(wo.invoice2 ?? wo.invoice_2 ?? '0') || 0;
+    const certConfirmed = wo.completionCertConfirm === true || wo.completionCertConfirm === 't';
+    const invType       = wo.invoiceType ?? wo.invoice_type;
+    const isPartial     = invType === 'جزئي';
+    const isFinal       = invType === 'نهائي';
 
-    // مغلق مالياً (financial_close_date) لكن بدون تاريخ فوترة (invoice_billing_date)
-    if (hasFinClose && !hasBillingDate) closedNotInvoiced++;
+    // شروط "مغلقة لم تُفوتر":
+    // 1. إجراء 155 موجود  2. ليست ملغية  3. قيمة م.1 = صفر
+    if (hasProc155 && !isCancelled && inv1Val <= 0) {
+      closedNotInvoiced++;
+      closedNotInvoicedValue += parseFloat(wo.estimatedValue ?? wo.estimated_value ?? '0') || 0;
+    }
 
-    // له رقم فاتورة (invoice_number) لكن لا يوجد تاريخ شهادة إنجاز
-    if (hasInvoice && !hasCertDate) invoicedNoCert++;
+    // شروط "مفوتر ولم يصدر له شهادة إنجاز":
+    // جزئي فقط + إجراء 155 + شهادة غير مؤكدة + م.1 موجود + م.2 فارغ
+    if (hasProc155 && isPartial && !certConfirmed && inv1Val > 0 && inv2Val <= 0) {
+      invoicedNoCert++;
+      invoicedNoCertValue += inv1Val;
+    }
+
+    // شروط "شهادات الإنجاز المكتملة":
+    // إجراء 155 + شهادة مؤكدة + (جزئي: م.1 وم.2 موجودتان / نهائي: م.1 موجودة)
+    const isCertComplete =
+      hasProc155 && certConfirmed &&
+      ((isPartial && inv1Val > 0 && inv2Val > 0) || (isFinal && inv1Val > 0));
+    if (isCertComplete) {
+      completedWithCert++;
+      completedWithCertValue += isPartial ? (inv1Val + inv2Val) : inv1Val;
+    }
   }
-  return { closedNotInvoiced, invoicedNoCert };
+
+  return { closedNotInvoiced, invoicedNoCert, closedNotInvoicedValue, invoicedNoCertValue, completedWithCert, completedWithCertValue };
 }
 
 function computeBillingCounts(wos: any[]): { partialBilled: number; notFullyBilled: number } {
@@ -415,9 +541,9 @@ function computeBillingCounts(wos: any[]): { partialBilled: number; notFullyBill
       partialBilled++;
     }
     if (invType != null) {
-      const collected = parseFloat(wo.collectedAmount ?? wo.collected_amount ?? '0') || 0;
-      const actual    = parseFloat(wo.actualInvoiceValue ?? wo.actual_invoice_value ?? '0') || 0;
-      if (actual > 0 && collected < actual) notFullyBilled++;
+      const collected  = parseFloat(wo.collectedAmount ?? wo.collected_amount ?? '0') || 0;
+      const estimated  = parseFloat(wo.estimatedValue  ?? wo.estimated_value  ?? '0') || 0;
+      if (estimated > 0 && collected < estimated) notFullyBilled++;
     }
   }
   return { partialBilled, notFullyBilled };
@@ -451,10 +577,10 @@ async function loadKpiConfig() {
   ]);
   const settings = sett[0] ?? { defaultDateRangeMode: 'month', includeCancelled: false, includeCompleted: true };
   return {
-    ruleMap: new Map<string, any>(rules.map(r => [r.projectTypeValue, r])),
+    ruleMap: new Map<string, any>(rules.map((r: any) => [r.projectTypeValue, r])),
     finRule: fin[0] ?? { isEnabled: false, slaDays: 20, warningDays: 3, endMode: 'COLUMN_DATE', endColumnKey: null, endStageId: null },
     settings,
-    stageMap: new Map<string, any>(stagesAll.map(s => [s.id, s])),
+    stageMap: new Map<string, any>(stagesAll.map((s: any) => [s.id, s])),
     rules,
     metrics,
     includeCancelled: settings.includeCancelled ?? false,
@@ -571,20 +697,27 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
     if (!scope.canViewPeriodicReport) {
       return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
     }
-    const [{ ruleMap, stageMap, finRule, settings, metrics, includeCancelled: cfgIncCancelled }, physicalKeyMap] =
+    const [{ ruleMap, stageMap, finRule, settings, metrics }, physicalKeyMap] =
       await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
     const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
     const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
     const sectorId = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
     const regionId = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
     const projectType = (req.query.projectType as string | undefined) || null;
-    const includeCancelled = req.query.includeCancelled !== undefined ? req.query.includeCancelled === 'true' : cfgIncCancelled;
+    const includeCancelled = false; // cancelled WOs are never shown in reports — export-only via ExportCenter
     const includeCompleted = req.query.includeCompleted !== undefined ? req.query.includeCompleted === 'true' : true;
 
     const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, includeCancelled, physicalKeyMap });
     const now = new Date();
-    const counts = aggregateCounts(wos, ruleMap, stageMap, now, includeCancelled, includeCompleted, physicalKeyMap);
-    const wosForMetrics = wos.filter(wo => {
+
+    // aggregateCounts now uses GeneralStatus — each WO counted exactly once.
+    // finRule + finEnabled are passed so financial phase statuses override exec.
+    const counts = aggregateCounts(
+      wos, ruleMap, stageMap, now, includeCancelled, includeCompleted,
+      physicalKeyMap, finRule, finRule.isEnabled,
+    );
+
+    const wosForMetrics = wos.filter((wo: any) => {
       const rule = ruleMap.get(wo.projectType ?? '');
       if (!rule) return true;
       const status = computeExecStatus(wo, rule, stageMap, now, physicalKeyMap);
@@ -594,23 +727,21 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
     });
     const metricsAverages = aggregateMetrics(wosForMetrics, metrics, stageMap, now, physicalKeyMap);
 
-    // ── Financial summary — exact same logic as /regions (computeFinStatus)
-    const finCounts = { total: 0, completed: 0, overdue: 0, warning: 0, onTime: 0 };
-    if (finRule.isEnabled) {
-      for (const wo of wos) {
-        const rule = ruleMap.get(wo.projectType ?? '');
-        if (!rule) continue;
-        const execStatus = computeExecStatus(wo, rule, stageMap, now, physicalKeyMap);
-        if (execStatus === 'CANCELLED' && !includeCancelled) continue;
-        const finStatus = computeFinStatus(wo, rule, finRule, stageMap, now, physicalKeyMap);
-        if (finStatus === null) continue;
-        finCounts.total++;
-        if (finStatus === 'COMPLETED') finCounts.completed++;
-        else if (finStatus === 'OVERDUE')  finCounts.overdue++;
-        else if (finStatus === 'WARNING')  finCounts.warning++;
-        else if (finStatus === 'ON_TIME')  finCounts.onTime++;
-      }
-    }
+    // Build structured breakdown objects from the new counts fields.
+    // These are informational only — card main values use the general-status fields above.
+    const execBreakdown = {
+      overdue:   counts.execOverdue,
+      warning:   counts.execWarning,
+      onTime:    counts.execOnTime,
+      completed: counts.completed - counts.finCompleted,
+    };
+    const finCountsObj = finRule.isEnabled ? {
+      total:     counts.finActiveTotal,
+      overdue:   counts.finOverdue,
+      warning:   counts.finWarning,
+      onTime:    counts.finOnTime,
+      completed: counts.finCompleted,
+    } : null;
 
     const kpiAlerts = computeKpiAlerts(wos);
 
@@ -620,7 +751,8 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
       metricsAverages,
       billingCounts: computeBillingCounts(wos),
       finEnabled: finRule.isEnabled,
-      finCounts: finRule.isEnabled ? finCounts : null,
+      finCounts: finCountsObj,
+      execBreakdown,
       kpiAlerts,
       from: from.toISOString(), to: to.toISOString(),
     });
@@ -630,19 +762,465 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// ── 3. GET /regions ────────────────────────────────────────────────────────────
+// ── 3. GET /kpi-alerts/closed-not-invoiced ────────────────────────────────────
+// Returns the individual work orders counted in the "مغلقة لم تُفوتر" KPI card,
+// with the same filters as /summary, plus approxValue per row for the drill-down drawer.
+
+router.get('/kpi-alerts/closed-not-invoiced', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const [{ settings }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    // Load region + sector name maps for display
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRow = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMap = new Map<string, RegionRow>();
+    for (const r of allRegions) regionMap.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMap = new Map<string, string | null>();
+    for (const s of allSectors) sectorMap.set(s.id, s.nameAr as string | null);
+
+    const rows: any[] = [];
+    for (const wo of wos) {
+      const hasProc155  = !!(wo.proc155CloseDate);
+      const isCancelled = (wo.status ?? '').toUpperCase() === 'CANCELLED';
+      const invType     = wo.invoiceType ?? (wo as any).invoice_type;
+      const inv1Val     = parseFloat(wo.invoice1 as any ?? '0') || 0;
+
+      // نفس منطق computeKpiAlerts: إجراء 155 + ليست ملغية + قيمة م.1 = 0
+      if (!(hasProc155 && !isCancelled && inv1Val <= 0)) continue;
+
+      const inv2Val   = parseFloat(wo.invoice2 as any ?? '0') || 0;
+      const estimated = parseFloat(wo.estimatedValue as any ?? '0') || 0;
+
+      const region       = wo.regionId ? regionMap.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMap.get(region.sectorId) : null;
+
+      rows.push({
+        orderNumber:        wo.orderNumber,
+        district:           wo.district,
+        regionNameAr:       region?.nameAr ?? null,
+        sectorNameAr:       sectorNameAr ?? null,
+        invoiceType:        invType ?? null,
+        proc155CloseDate:   wo.proc155CloseDate,
+        invoiceNumber:      wo.invoiceNumber ?? null,
+        invoice1:           inv1Val || null,
+        invoice2Number:     wo.invoice2Number ?? null,
+        invoice2:           inv2Val || null,
+        estimatedValue:     estimated || null,
+        approxValue:        estimated,
+      });
+    }
+
+    const totalValue = rows.reduce((s, r) => s + r.approxValue, 0);
+    res.json({ rows, count: rows.length, totalValue });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN closed-not-invoiced]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3b. GET /kpi-alerts/invoiced-no-cert ─────────────────────────────────────
+// Returns work orders counted in "فُوتر بلا شهادة إنجاز":
+//   1. إجراء 155 موجود
+//   2. نهائي → م.1 موجود / جزئي → م.1 و م.2 معاً
+//   3. completionCertConfirm !== true
+
+router.get('/kpi-alerts/invoiced-no-cert', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const [{ settings }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRow2 = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMap2 = new Map<string, RegionRow2>();
+    for (const r of allRegions) regionMap2.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMap2 = new Map<string, string | null>();
+    for (const s of allSectors) sectorMap2.set(s.id, s.nameAr as string | null);
+
+    const rows: any[] = [];
+    for (const wo of wos) {
+      const hasProc155    = !!(wo.proc155CloseDate);
+      const certConfirmed = wo.completionCertConfirm === true || wo.completionCertConfirm === 't';
+      const inv1Val       = parseFloat(wo.invoice1 as any ?? '0') || 0;
+      const inv2Val       = parseFloat(wo.invoice2 as any ?? '0') || 0;
+      const isPartial     = (wo.invoiceType ?? (wo as any).invoice_type) === 'جزئي';
+
+      // نفس منطق computeKpiAlerts: جزئي فقط
+      if (!(hasProc155 && isPartial && !certConfirmed && inv1Val > 0 && inv2Val <= 0)) continue;
+
+      const invType      = wo.invoiceType ?? (wo as any).invoice_type;
+      const region       = wo.regionId ? regionMap2.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMap2.get(region.sectorId) : null;
+
+      rows.push({
+        orderNumber:          wo.orderNumber,
+        district:             wo.district,
+        regionNameAr:         region?.nameAr ?? null,
+        sectorNameAr:         sectorNameAr ?? null,
+        invoiceType:          invType ?? null,
+        proc155CloseDate:     wo.proc155CloseDate,
+        invoiceNumber:        wo.invoiceNumber ?? null,
+        invoice1:             inv1Val,
+        invoiceBillingDate:   wo.invoiceBillingDate ?? null,
+        approxInvoice2:       inv1Val,   // تقدير م.2 = م.1
+        completionCertConfirm: wo.completionCertConfirm ?? null,
+      });
+    }
+
+    const totalValue = rows.reduce((s, r) => s + r.invoice1, 0);
+    res.json({ rows, count: rows.length, totalValue });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN invoiced-no-cert]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3c. GET /kpi-alerts/completed-with-cert ──────────────────────────────────
+// Returns work orders counted in "شهادات الإنجاز المكتملة":
+//   إجراء 155 + شهادة مؤكدة + (جزئي: م.1 وم.2 / نهائي: م.1)
+
+router.get('/kpi-alerts/completed-with-cert', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const [{ settings }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId   = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId   = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRow3 = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMap3 = new Map<string, RegionRow3>();
+    for (const r of allRegions) regionMap3.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMap3 = new Map<string, string | null>();
+    for (const s of allSectors) sectorMap3.set(s.id, s.nameAr as string | null);
+
+    const rows: any[] = [];
+    for (const wo of wos) {
+      const hasProc155    = !!(wo.proc155CloseDate);
+      const certConfirmed = wo.completionCertConfirm === true || wo.completionCertConfirm === 't';
+      const inv1Val       = parseFloat(wo.invoice1 as any ?? '0') || 0;
+      const inv2Val       = parseFloat(wo.invoice2 as any ?? '0') || 0;
+      const invType       = wo.invoiceType ?? (wo as any).invoice_type;
+      const isPartial     = invType === 'جزئي';
+      const isFinal       = invType === 'نهائي';
+
+      const isCertComplete =
+        hasProc155 && certConfirmed &&
+        ((isPartial && inv1Val > 0 && inv2Val > 0) || (isFinal && inv1Val > 0));
+      if (!isCertComplete) continue;
+
+      const region       = wo.regionId ? regionMap3.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMap3.get(region.sectorId) : null;
+      const totalInvoiced = isPartial ? (inv1Val + inv2Val) : inv1Val;
+
+      // Merge customFields JSONB to top-level so dynamic catalog columns are accessible
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      rows.push({
+        ...wo,
+        ...customMerged,
+        // Computed/joined fields (override any WO-level values with the same key)
+        regionNameAr:  region?.nameAr ?? null,
+        sectorNameAr:  sectorNameAr ?? null,
+        totalInvoiced,
+      });
+    }
+
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    // Re-attach computed fields stripped by filterOutput (they are not in column catalog)
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr:  rows[i].regionNameAr,
+      sectorNameAr:  rows[i].sectorNameAr,
+      totalInvoiced: rows[i].totalInvoiced,
+    }));
+    const totalValue = safeRows.reduce((s: number, r: any) => s + r.totalInvoiced, 0);
+    res.json({ rows: safeRows, count: safeRows.length, totalValue });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN completed-with-cert]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3d. GET /kpi-alerts/by-status ─────────────────────────────────────────────
+// Returns work orders for a given general status bucket (OVERDUE|WARNING|ON_TIME|COMPLETED|ALL).
+// Used by stat-card drill-down drawers on the periodic report.
+
+router.get('/kpi-alerts/by-status', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const statusFilter = (req.query.status as string | undefined) ?? 'ALL';
+    const validStatuses = ['OVERDUE', 'WARNING', 'ON_TIME', 'COMPLETED', 'ALL'];
+    if (!validStatuses.includes(statusFilter)) {
+      return res.status(400).json({ error: 'Invalid status value' });
+    }
+
+    const [{ ruleMap, stageMap, finRule, settings }, physicalKeyMap] =
+      await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId    = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+    const includeCompleted = req.query.includeCompleted !== undefined ? req.query.includeCompleted === 'true' : true;
+    const finEnabled  = finRule?.isEnabled ?? false;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRowBS = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMapBS = new Map<string, RegionRowBS>();
+    for (const r of allRegions) regionMapBS.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMapBS = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
+
+    const now = new Date();
+    const rows: any[] = [];
+
+    for (const wo of wos) {
+      const rule = ruleMap.get(wo.projectType ?? '');
+      if (!rule) continue;
+
+      const gs = computeGeneralStatus(wo, rule, finRule, finEnabled, stageMap, now, physicalKeyMap);
+
+      // Respect includeCompleted flag
+      const isFullyCompleted = gs === 'FIN_COMPLETED' || (gs === 'EXEC_COMPLETED' && !finEnabled);
+      if (isFullyCompleted && !includeCompleted) continue;
+      if (gs === 'CANCELLED') continue;
+
+      // Filter by requested status bucket
+      const matchesStatus =
+        statusFilter === 'ALL' ||
+        (statusFilter === 'OVERDUE'   && (gs === 'EXEC_OVERDUE'  || gs === 'FIN_OVERDUE'))  ||
+        (statusFilter === 'WARNING'   && (gs === 'EXEC_WARNING'  || gs === 'FIN_WARNING'))  ||
+        (statusFilter === 'ON_TIME'   && (gs === 'EXEC_ON_TIME'  || gs === 'FIN_ON_TIME'))  ||
+        (statusFilter === 'COMPLETED' && (gs === 'EXEC_COMPLETED' || gs === 'FIN_COMPLETED'));
+      if (!matchesStatus) continue;
+
+      const region      = wo.regionId ? regionMapBS.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMapBS.get(region.sectorId) : null;
+
+      // Merge customFields so dynamic columns are accessible by filterOutput
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null, generalStatus: gs });
+    }
+
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr:  rows[i].regionNameAr,
+      sectorNameAr:  rows[i].sectorNameAr,
+      generalStatus: rows[i].generalStatus,
+    }));
+
+    res.json({ rows: safeRows, count: safeRows.length });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN by-status]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3e. GET /kpi-alerts/metric-orders ─────────────────────────────────────────
+// Returns work orders contributing to a specific metric average (by metricCode).
+// Used by metric-card drill-down drawers.
+
+router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const metricCode = (req.query.metricCode as string | undefined) ?? '';
+    if (!metricCode) return res.status(400).json({ error: 'metricCode is required' });
+
+    const [{ stageMap, settings, metrics }, physicalKeyMap] =
+      await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+
+    const metric = metrics.find((m: any) => m.code === metricCode && m.isEnabled);
+    if (!metric) return res.status(404).json({ error: 'Metric not found or disabled' });
+
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId    = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRowMO = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMapMO = new Map<string, RegionRowMO>();
+    for (const r of allRegions) regionMapMO.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMapMO = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
+
+    const now = new Date();
+    const rows: any[] = [];
+
+    for (const wo of wos) {
+      // Cancelled WOs are never included in metric calculations
+      const stage = stageMap.get(wo.stageId ?? '');
+      if (stage?.isCancelled) continue;
+
+      const metricDays = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
+      if (metricDays === null) continue; // WO has no value for this metric
+
+      const region      = wo.regionId ? regionMapMO.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMapMO.get(region.sectorId) : null;
+
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null, metricDays: Math.round(metricDays) });
+    }
+
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr: rows[i].regionNameAr,
+      sectorNameAr: rows[i].sectorNameAr,
+      metricDays:   rows[i].metricDays,
+    }));
+
+    res.json({ rows: safeRows, count: safeRows.length, metricNameAr: metric.nameAr, metricNameEn: metric.nameEn ?? null });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN metric-orders]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3f. GET /kpi-alerts/partial-billed-orders ─────────────────────────────────
+// Returns work orders for billing-count badges:
+//   type=partialBilled  → مفوتر جزئياً
+//   type=notFullyBilled → غير مُحصَّل بالكامل
+
+router.get('/kpi-alerts/partial-billed-orders', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) {
+      return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+    }
+    const type = (req.query.type as string | undefined) ?? '';
+    if (type !== 'partialBilled' && type !== 'notFullyBilled') {
+      return res.status(400).json({ error: 'type must be partialBilled or notFullyBilled' });
+    }
+
+    const [{ settings }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId    = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    type RegionRowPB = { id: string; nameAr: string | null; sectorId: string | null };
+    const regionMapPB = new Map<string, RegionRowPB>();
+    for (const r of allRegions) regionMapPB.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
+    const sectorMapPB = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
+
+    const rows: any[] = [];
+
+    for (const wo of wos) {
+      const invType      = wo.invoiceType ?? (wo as any).invoice_type;
+      const collected    = parseFloat(wo.collectedAmount ?? (wo as any).collected_amount ?? '0') || 0;
+      const estimated    = parseFloat(wo.estimatedValue  ?? (wo as any).estimated_value  ?? '0') || 0;
+      const inv1Val      = parseFloat(wo.invoice1 ?? (wo as any).invoice_1 ?? '0') || 0;
+
+      let matches = false;
+      if (type === 'partialBilled') {
+        matches = invType === 'جزئي' && (wo.invoiceBillingDate ?? (wo as any).invoice_billing_date) != null && inv1Val > 0;
+      } else {
+        matches = invType != null && estimated > 0 && collected < estimated;
+      }
+      if (!matches) continue;
+
+      const region      = wo.regionId ? regionMapPB.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMapPB.get(region.sectorId) : null;
+
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null });
+    }
+
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr: rows[i].regionNameAr,
+      sectorNameAr: rows[i].sectorNameAr,
+    }));
+
+    res.json({ rows: safeRows, count: safeRows.length });
+  } catch (err) {
+    console.error('[KPI DRILL-DOWN partial-billed-orders]', err);
+    res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 4. GET /regions ────────────────────────────────────────────────────────────
 
 router.get('/regions', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const scope = await getUserScope(req.user!.id);
-    const [{ ruleMap, stageMap, finRule, settings, metrics, includeCancelled: cfgIncCancelled }, physicalKeyMap] =
+    const [{ ruleMap, stageMap, finRule, settings, metrics }, physicalKeyMap] =
       await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
     const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
     const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
     const forceSectorId = scope.sectorId ?? ((req.query.sectorId as string) || null);
     const forceRegionId = scope.regionId ?? ((req.query.regionId as string) || null);
     const projectType = (req.query.projectType as string) || null;
-    const includeCancelled = req.query.includeCancelled !== undefined ? req.query.includeCancelled === 'true' : cfgIncCancelled;
+    const includeCancelled = false; // cancelled WOs are never shown in reports — export-only via ExportCenter
     const includeCompleted = req.query.includeCompleted !== undefined ? req.query.includeCompleted === 'true' : true;
 
     const allWOs = await fetchWOs({ sectorId: forceSectorId, regionId: forceRegionId, projectType, from, to, dateBasisType, dateBasisColumnKey, includeCancelled, physicalKeyMap });
@@ -654,16 +1232,16 @@ router.get('/regions', authenticate, async (req: AuthRequest, res: Response) => 
     const allRegions = await db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId })
       .from(regions).where(and(...regionConds));
 
-    const sectorIds = [...new Set(allRegions.map(r => r.sectorId).filter(Boolean))] as string[];
+    const sectorIds = [...new Set(allRegions.map((r: any) => r.sectorId).filter(Boolean))] as string[];
     const allSectors = sectorIds.length
       ? await db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors).where(eq(sectors.active, true))
       : [];
-    const sectorMap = new Map<string, any>(allSectors.map(s => [s.id, s]));
+    const sectorMap = new Map<string, any>(allSectors.map((s: any) => [s.id, s]));
 
-    const result = allRegions.map(region => {
-      const wos = allWOs.filter(wo => wo.regionId === region.id);
-      const counts = aggregateCounts(wos, ruleMap, stageMap, now, includeCancelled, includeCompleted, physicalKeyMap);
-      const wosForMetrics = wos.filter(wo => {
+    const result = allRegions.map((region: any) => {
+      const wos = allWOs.filter((wo: any) => wo.regionId === region.id);
+      const counts = aggregateCounts(wos, ruleMap, stageMap, now, includeCancelled, includeCompleted, physicalKeyMap, finRule, finRule.isEnabled);
+      const wosForMetrics = wos.filter((wo: any) => {
         const rule = ruleMap.get(wo.projectType ?? '');
         if (!rule) return true;
         const status = computeExecStatus(wo, rule, stageMap, now, physicalKeyMap);
@@ -717,12 +1295,12 @@ router.get('/region/:id/details', authenticate, async (req: AuthRequest, res: Re
     const scope = await getUserScope(req.user!.id);
     if (scope.regionId && scope.regionId !== regionId) return res.status(403).json({ error: 'Forbidden' });
 
-    const [{ ruleMap, stageMap, finRule, settings, rules, metrics, includeCancelled: cfgIncCancelled }, physicalKeyMap] =
+    const [{ ruleMap, stageMap, finRule, settings, rules, metrics }, physicalKeyMap] =
       await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
     const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
     const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
     const projectType = (req.query.projectType as string) || null;
-    const includeCancelled = req.query.includeCancelled !== undefined ? req.query.includeCancelled === 'true' : cfgIncCancelled;
+    const includeCancelled = false; // cancelled WOs are never shown in reports — export-only via ExportCenter
     const includeCompleted = req.query.includeCompleted !== undefined ? req.query.includeCompleted === 'true' : true;
 
     const wos = await fetchWOs({ regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, includeCancelled, physicalKeyMap });
@@ -745,7 +1323,7 @@ router.get('/region/:id/details', authenticate, async (req: AuthRequest, res: Re
 
     for (const [ptValue, ptWOs] of projectTypeGroups) {
       const rule = ruleMap.get(ptValue);
-      const ptLabel = rules.find(r => r.projectTypeValue === ptValue)?.projectTypeLabelAr ?? ptValue;
+      const ptLabel = rules.find((r: any) => r.projectTypeValue === ptValue)?.projectTypeLabelAr ?? ptValue;
 
       if (!rule) {
         projectTypeStats.push({ projectTypeValue: ptValue, projectTypeLabelAr: ptLabel, configured: false, total: ptWOs.length });
@@ -803,7 +1381,7 @@ router.get('/region/:id/details', authenticate, async (req: AuthRequest, res: Re
     }
 
     // WOs with holdReason set (for REASONS table)
-    const reasonWOs = wos.filter(wo => wo.holdReason && wo.holdReason.trim());
+    const reasonWOs = wos.filter((wo: any) => wo.holdReason && wo.holdReason.trim());
 
     res.json({
       projectTypeStats, overdueWOs, onTimeWOs,
