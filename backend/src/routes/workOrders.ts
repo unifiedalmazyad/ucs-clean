@@ -8,6 +8,7 @@ import { unlink } from 'fs/promises';
 import path from 'path';
 import { emitEvent } from '../events/dispatcher';
 import { EventTypes } from '../events/eventTypes';
+import { resolveContractId } from './contracts';
 
 /**
  * Auto-compute collected_amount and remaining_amount from invoice fields.
@@ -17,14 +18,14 @@ function computeFinancials(
   invoiceType: string | null | undefined,
   invoice1: number | string | null | undefined,
   invoice2: number | string | null | undefined,
-  actualInvoiceValue: number | string | null | undefined,
+  estimatedValue: number | string | null | undefined,
 ): { collectedAmount: number; remainingAmount: number } | null {
   if (!invoiceType) return null;
-  const inv1   = Number(invoice1)            || 0;
-  const inv2   = Number(invoice2)            || 0;
-  const actual = Number(actualInvoiceValue)  || 0;
-  const collected = invoiceType === 'نهائي' ? inv1 : inv1 + inv2;
-  return { collectedAmount: collected, remainingAmount: actual - collected };
+  const inv1 = Number(invoice1)        || 0;
+  const inv2 = Number(invoice2)        || 0;
+  const est  = Number(estimatedValue)  || 0;
+  const totalInvoiced = inv1 + inv2;
+  return { collectedAmount: totalInvoiced, remainingAmount: est - totalInvoiced };
 }
 
 /**
@@ -254,9 +255,14 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
       (coreReady as any).invoiceType,
       (coreReady as any).invoice1,
       (coreReady as any).invoice2,
-      (coreReady as any).actualInvoiceValue,
+      (coreReady as any).estimatedValue,
     );
     if (finPost) Object.assign(coreReady, finPost);
+
+    // ── Auto-link contract (system-managed, never from user input) ───────────
+    const postSectorId = (coreReady as any).sectorId ?? null;
+    const postRefDate  = (coreReady as any).assignmentDate ?? (coreReady as any).createdAt ?? null;
+    (coreReady as any).contractId = await resolveContractId(postSectorId, postRefDate);
 
     // ── Duplicate order number check ─────────────────────────────────────────
     const incomingOrderNumber = (coreReady as any).orderNumber?.toString().trim();
@@ -373,10 +379,10 @@ router.put('/:id', authenticate, async (req: AuthRequest, res) => {
 
     // ── Auto-compute financial fields (merge incoming with existing) ──────────
     const finPut = computeFinancials(
-      (coreReady as any).invoiceType         ?? (existing as any).invoiceType,
-      (coreReady as any).invoice1            ?? (existing as any).invoice1,
-      (coreReady as any).invoice2            ?? (existing as any).invoice2,
-      (coreReady as any).actualInvoiceValue  ?? (existing as any).actualInvoiceValue,
+      (coreReady as any).invoiceType     ?? (existing as any).invoiceType,
+      (coreReady as any).invoice1        ?? (existing as any).invoice1,
+      (coreReady as any).invoice2        ?? (existing as any).invoice2,
+      (coreReady as any).estimatedValue  ?? (existing as any).estimatedValue,
     );
     if (finPut) Object.assign(coreReady, finPut);
 
@@ -388,9 +394,22 @@ router.put('/:id', authenticate, async (req: AuthRequest, res) => {
       delete (coreReady as any).regionId;
     }
 
+    // ── Re-resolve contract if sectorId or assignmentDate changed ────────────
+    // contractId is system-managed — never accepted from user input.
+    const putSectorId    = (coreReady as any).sectorId      ?? (existing as any).sectorId;
+    const putAssignDate  = (coreReady as any).assignmentDate ?? (existing as any).assignmentDate ?? (existing as any).createdAt;
+    const sectorChanged  = (coreReady as any).sectorId      !== undefined &&
+                           (coreReady as any).sectorId      !== (existing as any).sectorId;
+    const dateChanged    = (coreReady as any).assignmentDate !== undefined &&
+                           String((coreReady as any).assignmentDate).slice(0, 10) !==
+                           String((existing as any).assignmentDate ?? '').slice(0, 10);
+    if (sectorChanged || dateChanged) {
+      (coreReady as any).contractId = await resolveContractId(putSectorId, putAssignDate);
+    }
+
     // Merge dynamic cols into existing customFields for backward-compat reads
-    const currentCustomFields = typeof existing.customFields === 'string' 
-      ? JSON.parse(existing.customFields) 
+    const currentCustomFields = typeof existing.customFields === 'string'
+      ? JSON.parse(existing.customFields)
       : (existing.customFields || {});
     const mergedCustomFields = { ...currentCustomFields, ...dynamicFiltered };
 
