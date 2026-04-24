@@ -29,7 +29,6 @@ const STATUS_OPTIONS = [
   { value: 'OVERDUE',        label: 'متأخر',       labelEn: 'Overdue'    },
   { value: 'COMPLETED',      label: 'منجز',        labelEn: 'Done'       },
   { value: 'COMPLETED_LATE', label: 'منجز متأخر',  labelEn: 'Late Done'  },
-  { value: 'CANCELLED',      label: 'ملغى',        labelEn: 'Cancelled'  },
   { value: 'CLOSED',         label: 'مغلق',        labelEn: 'Closed'     },
   { value: 'NONE',           label: 'بدون بيانات', labelEn: 'No data'    },
 ];

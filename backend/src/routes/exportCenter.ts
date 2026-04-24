@@ -62,6 +62,7 @@ const DATASETS: DatasetDef[] = [
   { key: 'user_overrides',        nameAr: 'استثناءات المستخدمين',  nameEn: 'User Permission Overrides', descAr: 'تجاوزات الصلاحيات على مستوى المستخدم',        descEn: 'Per-user column permission overrides',           supportsDateRange: false, supportsRegionSector: false, supportsStatusFilter: false },
   { key: 'import_logs',           nameAr: 'سجلات الاستيراد',       nameEn: 'Import Logs',             descAr: 'سجل عمليات الاستيراد السابقة',                   descEn: 'History of import operations',                   supportsDateRange: true,  supportsRegionSector: false, supportsStatusFilter: false },
   { key: 'audit_logs',            nameAr: 'سجلات المراجعة',        nameEn: 'Audit Logs',              descAr: 'سجل جميع التعديلات على النظام',                  descEn: 'Full audit trail of system changes',             supportsDateRange: true,  supportsRegionSector: false, supportsStatusFilter: false },
+  { key: 'cancelled_work_orders', nameAr: 'أوامر العمل الملغية',   nameEn: 'Cancelled Work Orders',   descAr: 'أوامر العمل التي وصلت إلى مرحلة ملغية (للمدير فقط)', descEn: 'Work orders in a cancelled stage (admin only)',  supportsDateRange: true,  supportsRegionSector: true,  supportsStatusFilter: false },
 ];
 
 const DATASET_KEYS = new Set(DATASETS.map(d => d.key));
@@ -112,6 +113,18 @@ async function fetchDataset(key: string, opts: {
       return db.select().from(importRuns).orderBy(importRuns.createdAt);
     case 'audit_logs':
       return db.select().from(auditLogs).orderBy(auditLogs.createdAt);
+    case 'cancelled_work_orders': {
+      // Join work_orders with stages to find only those where isCancelled = true
+      const cancelledStages = await db.select({ id: stages.id }).from(stages).where(eq(stages.isCancelled, true));
+      const cancelledStageIds = new Set(cancelledStages.map((s: { id: string }) => s.id));
+      let rows: any[] = await db.select().from(workOrders);
+      rows = rows.filter(r => r.stageId && cancelledStageIds.has(r.stageId));
+      if (opts.regionId) rows = rows.filter(r => r.regionId === opts.regionId);
+      if (opts.sectorId) rows = rows.filter(r => r.sectorId === opts.sectorId);
+      if (opts.from)     rows = rows.filter(r => r.createdAt && new Date(r.createdAt) >= new Date(opts.from!));
+      if (opts.to)       rows = rows.filter(r => r.createdAt && new Date(r.createdAt) <= new Date(opts.to!));
+      return rows;
+    }
     default:
       return [];
   }

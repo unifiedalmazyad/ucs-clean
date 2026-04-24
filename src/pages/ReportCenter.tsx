@@ -862,7 +862,6 @@ function BySectorReport() {
     { key: 'warn',      label: 'تنبيه',    labelEn: 'Warning'   },
     { key: 'ok',        label: 'منتظم',    labelEn: 'On Track'  },
     { key: 'completed', label: 'منجز',     labelEn: 'Completed' },
-    { key: 'cancelled', label: 'ملغي',     labelEn: 'Cancelled' },
   ];
 
   const doExport = async (format: 'excel' | 'pdf') => {
@@ -929,9 +928,6 @@ function BySectorReport() {
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${r.completed > 0 ? 'bg-blue-100 text-blue-700' : 'text-slate-400'}`}>{r.completed}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-slate-400">{r.cancelled}</span>
                   </td>
                 </tr>
               ))}

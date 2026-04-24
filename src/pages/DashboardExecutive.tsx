@@ -2,17 +2,17 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLang } from '../contexts/LangContext';
 import api from '../services/api';
 import { 
-  LayoutDashboard, 
-  TrendingUp, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Clock, 
-  DollarSign, 
-  X, 
-  ChevronDown, 
-  RefreshCw, 
-  Calendar, 
-  Filter, 
+  LayoutDashboard,
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  DollarSign,
+  X,
+  ChevronDown,
+  RefreshCw,
+  Calendar,
+  Filter,
   Maximize2,
   ClipboardList,
   Target,
@@ -20,8 +20,9 @@ import {
   XCircle,
   Building2,
   MapPin,
-  ArrowDownUp,
-  Layers
+  Layers,
+  Info,
+  Scale
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -773,39 +774,46 @@ export default function DashboardExecutive() {
       </div>
 
       {/* Financial Cards */}
-      <div className="px-6 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="px-6 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <FinanceCard
           label={lang === 'en' ? 'Estimated Value' : 'القيمة التقديرية'}
           value={formatCurrency(data?.financial?.estimated)}
           icon={DollarSign}
           loading={loading}
+          tooltip={lang === 'en'
+            ? 'Total expected value of all work orders in the selected period. Represents the baseline for comparison.'
+            : 'إجمالي القيمة المتوقعة لجميع أوامر العمل ضمن الفترة المحددة. تمثل خط الأساس للمقارنة.'}
         />
         <FinanceCard
-          label={lang === 'en' ? 'Invoiced Amount' : 'المبلغ المفوتر'}
+          label={lang === 'en' ? 'Total Invoiced' : 'إجمالي المفوتر'}
           value={formatCurrency(data?.financial?.invoiced)}
           icon={ClipboardList}
           loading={loading}
           pct={data?.financial?.estimated ? (data.financial.invoiced / data.financial.estimated) * 100 : null}
+          tooltip={lang === 'en'
+            ? 'Total invoiced so far (Invoice 1 + Invoice 2) across all work orders.'
+            : 'مجموع ما تم إصداره من فواتير حتى الآن (مستخلص 1 + مستخلص 2) لجميع أوامر العمل.'}
         />
         <FinanceCard
-          label={lang === 'en' ? 'Gap (Est. − Invoiced)' : 'الفرق (تقديري − مفوتر)'}
-          value={formatCurrency((data?.financial?.estimated ?? 0) - (data?.financial?.invoiced ?? 0))}
-          icon={ArrowDownUp}
-          loading={loading}
-        />
-        <FinanceCard
-          label={lang === 'en' ? 'Collected' : 'المحصل'}
-          value={formatCurrency(data?.financial?.collected)}
-          icon={CheckCircle2}
-          loading={loading}
-          pct={data?.financial?.invoiced ? (data.financial.collected / data.financial.invoiced) * 100 : null}
-        />
-        <FinanceCard
-          label={lang === 'en' ? 'Remaining' : 'المتبقي'}
-          value={formatCurrency(data?.financial?.remaining)}
+          label={lang === 'en' ? 'Expected Remaining' : 'المتبقي المتوقع'}
+          value={formatCurrency(data?.financial?.expectedRemaining)}
           icon={Clock}
           loading={loading}
-          pct={data?.financial?.invoiced ? (data.financial.remaining / data.financial.invoiced) * 100 : null}
+          tooltip={lang === 'en'
+            ? 'Approximate remaining amount to be invoiced based on current work order status. For partial orders, Invoice 2 is assumed ≈ Invoice 1 when only Invoice 1 exists. For final orders, the estimate is used when no invoice exists.'
+            : 'تقدير تقريبي للمبلغ المتبقي فوترته بناءً على حالة أوامر العمل الحالية. في الأعمال الجزئية قد يُفترض أن المستخلص الثاني قريب من الأول، أما في الأعمال النهائية فيُستخدم التقدير عند عدم وجود فاتورة.'}
+        />
+        <FinanceCard
+          label={lang === 'en' ? 'Completed Invoicing Gap' : 'الفرق للمفوتر المكتمل'}
+          value={formatCurrency(data?.financial?.completedDiffValue ?? 0)}
+          subValue={data?.financial?.completedDiffPct != null
+            ? `${(data.financial.completedDiffPct as number).toFixed(1)}%`
+            : null}
+          icon={Scale}
+          loading={loading}
+          tooltip={lang === 'en'
+            ? 'Actual difference between estimated and total invoiced for fully-invoiced orders only. Partial: both invoices exist. Final: invoice 1 exists. Shown as value and percentage.'
+            : 'الفرق الفعلي بين القيمة التقديرية وإجمالي المفوتر للأوامر المكتملة فوترة فقط. يُحسب فقط بعد اكتمال الفوترة (جزئي: مستخلصين، نهائي: مستخلص واحد)، ويُعرض كقيمة ونسبة.'}
         />
       </div>
 
@@ -1332,8 +1340,7 @@ export default function DashboardExecutive() {
                 <div className="col-span-full h-px bg-slate-100 my-2" />
                 
                 <DetailItem label={lang === 'en' ? 'Estimated' : 'التقديري'} value={formatCurrency(selectedDelay.estimated_value)} />
-                <DetailItem label={lang === 'en' ? 'Invoiced' : 'المفوتر'} value={formatCurrency(selectedDelay.actual_invoice_value)} />
-                <DetailItem label={lang === 'en' ? 'Collected' : 'المحصل'} value={formatCurrency(selectedDelay.collected_amount)} />
+                <DetailItem label={lang === 'en' ? 'Total Invoiced' : 'إجمالي المفوتر'} value={formatCurrency(selectedDelay.collected_amount)} />
               </div>
               <div className="px-6 py-4 bg-slate-50 border-t flex justify-end">
                 <button 
@@ -1362,7 +1369,6 @@ function KpiSummaryBar({ kpis, loading, lang }: any) {
     { label: t('نسبة الإنجاز','Completion Rate'),      value: pct,                                icon: TrendingUp,    iconBg: 'bg-emerald-50', iconColor: 'text-emerald-600' },
     { label: t('منجز','Completed'),                    value: fmt(kpis?.execCompleted),            icon: CheckCircle2,  iconBg: 'bg-emerald-50', iconColor: 'text-emerald-600' },
     { label: t('قيد الانتظار','Pending'),              value: fmt(kpis?.execPending),              icon: Clock,         iconBg: 'bg-amber-50',   iconColor: 'text-amber-600' },
-    { label: t('ملغي','Cancelled'),                    value: fmt(kpis?.cancelled),                icon: XCircle,       iconBg: 'bg-slate-100',  iconColor: 'text-slate-400' },
     { label: t('متأخر تنفيذي','Exec Overdue'),         value: fmt(kpis?.execDelayedUnjustified),   icon: AlertTriangle, iconBg: 'bg-red-50',     iconColor: 'text-red-500' },
     { label: t('متأخر تنفيذي مسبب','Exec Justified'),  value: fmt(kpis?.execDelayedJustified),     icon: AlertTriangle, iconBg: 'bg-orange-50',  iconColor: 'text-orange-500' },
     { label: t('متأخر مالي','Fin Overdue'),            value: fmt(kpis?.finDelayedUnjustified),    icon: AlertTriangle, iconBg: 'bg-red-50',     iconColor: 'text-red-400' },
@@ -1401,7 +1407,7 @@ function KpiSummaryBar({ kpis, loading, lang }: any) {
 /* ── Finance card — theme color only ── */
 const THEME = '#1F3A8A';
 
-function FinanceCard({ label, value, icon: Icon, loading, pct }: any) {
+function FinanceCard({ label, value, icon: Icon, loading, pct, tooltip, subValue }: any) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -1419,12 +1425,25 @@ function FinanceCard({ label, value, icon: Icon, loading, pct }: any) {
         ) : (
           <>
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">{label}</div>
+              <div className="flex items-center gap-1 min-w-0">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">{label}</div>
+                {tooltip && (
+                  <div className="relative group flex-shrink-0">
+                    <Info className="w-3 h-3 text-slate-300 cursor-help" />
+                    <div className="absolute bottom-full right-0 mb-1 w-60 bg-slate-800 text-white text-[10px] rounded-lg p-2 opacity-0 group-hover:opacity-100 transition-opacity z-50 leading-relaxed pointer-events-none shadow-xl whitespace-normal">
+                      {tooltip}
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: '#EEF2FF' }}>
                 <Icon className="w-4 h-4" style={{ color: THEME }} />
               </div>
             </div>
             <div className="text-xl font-black text-slate-900 leading-none">{value}</div>
+            {subValue != null && (
+              <div className="text-xs font-semibold text-slate-500 mt-1">{subValue}</div>
+            )}
             {pct != null && (
               <div className="mt-3">
                 <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">

@@ -5,8 +5,10 @@ import {
   RefreshCw, ChevronDown, BarChart2, Clock, CheckCircle2,
   XCircle, AlertTriangle, TrendingUp, ArrowRight, Search, X,
   EyeOff, Eye, SlidersHorizontal, Download, Printer, Link2, Calendar,
-  FileX2, BadgeAlert,
+  FileX2, FileText, BadgeAlert, BadgeCheck,
 } from 'lucide-react';
+import KpiDrawer from '../components/KpiDrawer';
+import type { KpiCol } from '../components/KpiDrawer';
 
 // ─── Metric note context ─────────────────────────────────────────────────────
 
@@ -66,18 +68,21 @@ interface Config {
   userScope: { sectorId: string | null; regionId: string | null; role: string };
 }
 interface FinSumCounts { total: number; completed: number; overdue: number; warning: number; onTime: number; }
-interface KpiAlerts { closedNotInvoiced: number; invoicedNoCert: number; }
+interface KpiAlerts { closedNotInvoiced: number; invoicedNoCert: number; closedNotInvoicedValue: number; invoicedNoCertValue: number; completedWithCert?: number; completedWithCertValue?: number; }
+interface ExecBreakdown { overdue: number; warning: number; onTime: number; completed: number; }
 interface Summary {
-  total: number; active: number; completed: number; cancelled: number;
+  total: number; active: number; completed: number;
   overdue: number; warning: number; onTime: number; unconfigured: number;
   avgDays: number | null; metricsAverages: MetricResult[]; from: string; to: string;
   billingCounts?: { partialBilled: number; notFullyBilled: number };
-  finEnabled?: boolean; finCounts?: FinSumCounts | null;
+  finEnabled?: boolean;
+  finCounts?: FinSumCounts | null;     // fin phase breakdown (informational)
+  execBreakdown?: ExecBreakdown | null; // exec phase breakdown (informational)
   kpiAlerts?: KpiAlerts | null;
 }
 interface RegionCard {
   id: string; nameAr: string; nameEn?: string; sectorId: string | null; sectorNameAr: string | null; sectorNameEn?: string | null;
-  total: number; active: number; completed: number; cancelled: number;
+  total: number; active: number; completed: number;
   overdue: number; warning: number; onTime: number; avgDays: number | null;
   metricsAverages: MetricResult[];
   execDelayedJustified: number; execDelayedUnjustified: number;
@@ -87,7 +92,7 @@ interface FinCounts { total: number; completed: number; overdue: number; warning
 interface PtStat {
   projectTypeValue: string; projectTypeLabelAr: string; projectTypeLabelEn?: string; configured: boolean;
   slaDays?: number; warningDays?: number;
-  total: number; active?: number; completed?: number; cancelled?: number;
+  total: number; active?: number; completed?: number;
   overdue?: number; warning?: number; onTime?: number; avgDays?: number | null;
   metricsAverages?: MetricResult[];
   finCounts?: FinCounts | null;
@@ -95,10 +100,10 @@ interface PtStat {
 interface RegionDetails {
   projectTypeStats: PtStat[];
   overdueWOs: any[]; onTimeWOs: any[];
-  cancelledWOs: any[]; reasonWOs: any[];
+  reasonWOs: any[];
   finOverdueWOs: any[]; finOnTimeWOs: any[];
   finStats: FinCounts | null;
-  finEnabled: boolean; includeCancelled: boolean;
+  finEnabled: boolean;
   metricsAverages: MetricResult[];
 }
 interface Filters {
@@ -137,7 +142,7 @@ const ALL_FIN_COLS: { key: string; labelAr: string; labelEn: string; virtual?: b
   { key: 'assignmentDate',     labelAr: 'تاريخ الإسناد', labelEn: 'Assignment Date' },
   { key: 'invoiceNumber',      labelAr: 'رقم المستخلص', labelEn: 'Invoice No.' },
   { key: 'estimatedValue',     labelAr: 'القيمة التقديرية', labelEn: 'Estimated Value' },
-  { key: 'actualInvoiceValue', labelAr: 'القيمة الفعلية', labelEn: 'Actual Value' },
+  { key: 'actualInvoiceValue', labelAr: 'القيمة الفعلية (تاريخي)', labelEn: 'Actual Value (Historical)' },
   { key: 'collectedAmount',    labelAr: 'المحصّل', labelEn: 'Collected' },
   { key: 'remainingAmount',    labelAr: 'المتبقى', labelEn: 'Remaining' },
   { key: 'finDelayJustified',  labelAr: 'تأخير مالي مسبب؟', labelEn: 'Fin Delay Justified?', virtual: true },
@@ -234,14 +239,17 @@ function toCamelCase(s: string): string {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function StatCard({ label, value, icon: Icon, colorCls, subLabel, execVal, finVal }: {
+function StatCard({ label, value, icon: Icon, colorCls, subLabel, execVal, finVal, onClick }: {
   label: string; value: number | string | null; icon?: any; colorCls?: string; subLabel?: string;
-  execVal?: number | null; finVal?: number | null;
+  execVal?: number | null; finVal?: number | null; onClick?: () => void;
 }) {
   const { lang } = useLang();
   const showDetail = execVal != null && finVal != null;
   return (
-    <div className={`rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm ${colorCls ?? 'border-slate-200'}`}>
+    <div
+      className={`rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm ${colorCls ?? 'border-slate-200'} ${onClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-300 transition-shadow' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-slate-500">{label}</span>
         {Icon && <Icon className="w-4 h-4 text-slate-300" />}
@@ -264,7 +272,7 @@ function StatCard({ label, value, icon: Icon, colorCls, subLabel, execVal, finVa
   );
 }
 
-function MetricCard({ m }: { m: MetricResult }) {
+function MetricCard({ m, onClick }: { m: MetricResult; onClick?: () => void }) {
   const { lang } = useLang();
   const { noteByCode } = React.useContext(MetricCfgCtx);
   const isNumeric = m.metricType === 'NUMERIC_AGG';
@@ -275,7 +283,10 @@ function MetricCard({ m }: { m: MetricResult }) {
     : '—';
   const note = noteByCode[m.code] ?? null;
   return (
-    <div className={`rounded-xl border bg-white shadow-sm p-4 flex flex-col gap-1 w-full h-full ${isNumeric ? 'border-violet-100' : 'border-slate-200'}`}>
+    <div
+      className={`rounded-xl border bg-white shadow-sm p-4 flex flex-col gap-1 w-full h-full ${isNumeric ? 'border-violet-100' : 'border-slate-200'} ${onClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-300 transition-shadow' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-center justify-between gap-1">
         <div className="flex items-center gap-1 min-w-0">
           <span className="text-xs font-medium text-slate-500 truncate">{lang === 'en' && m.nameEn ? m.nameEn : m.nameAr}</span>
@@ -343,13 +354,14 @@ function HealthBar({ overdue, warning, onTime, completed, total }: {
 const MAX_COLS = 10;
 
 function ColumnPickerModal({
-  tableKey, availableCols, selectedKeys, onSave, onClose,
+  tableKey, availableCols, selectedKeys, onSave, onClose, maxCols = MAX_COLS,
 }: {
-  tableKey: 'EXEC' | 'FIN' | 'REASONS';
+  tableKey: string;
   availableCols: { key: string; labelAr: string; labelEn?: string; virtual?: boolean }[];
   selectedKeys: string[];
   onSave: (keys: string[]) => void;
   onClose: () => void;
+  maxCols?: number;
 }) {
   const { lang } = useLang();
   const validKeys = useMemo(
@@ -358,10 +370,10 @@ function ColumnPickerModal({
     []
   );
   const [selected, setSelected] = useState<string[]>(validKeys);
-  const atMax = selected.length >= MAX_COLS;
+  const atMax = selected.length >= maxCols;
   const toggle = (key: string) => setSelected(prev => {
     if (prev.includes(key)) return prev.filter(k => k !== key);
-    if (prev.length >= MAX_COLS) return prev;
+    if (prev.length >= maxCols) return prev;
     return [...prev, key];
   });
   return (
@@ -371,7 +383,7 @@ function ColumnPickerModal({
           <div>
             <h2 className="font-bold text-slate-800">{lang === 'en' ? 'Select Columns' : 'اختيار الأعمدة'}</h2>
             <p className={`text-xs mt-0.5 ${atMax ? 'text-amber-600 font-medium' : 'text-slate-400'}`}>
-              {selected.length}/{MAX_COLS} {lang === 'en' ? 'columns' : 'أعمدة'} {atMax && (lang === 'en' ? '— Max reached' : '— الحد الأقصى')}
+              {selected.length}/{maxCols} {lang === 'en' ? 'columns' : 'أعمدة'} {atMax && (lang === 'en' ? '— Max reached' : '— الحد الأقصى')}
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
@@ -700,7 +712,7 @@ function RegionExpandedPanel({
   allReasonsCols: { key: string; labelAr: string; labelEn?: string; virtual?: boolean }[];
 }) {
   const { lang } = useLang();
-  const [activeTab, setActiveTab] = useState<'overdue' | 'exec-justified' | 'ontime' | 'fin' | 'fin-justified' | 'cancelled' | 'reasons'>('overdue');
+  const [activeTab, setActiveTab] = useState<'overdue' | 'exec-justified' | 'ontime' | 'fin' | 'fin-justified' | 'reasons'>('overdue');
   const [showMetrics, setShowMetrics] = useState(true);
 
   const visibleStats = useMemo(() => {
@@ -809,7 +821,7 @@ function RegionExpandedPanel({
           </div>
 
           {/* Detail tables */}
-          {(details.overdueWOs.length > 0 || details.onTimeWOs.length > 0 || details.finEnabled || details.cancelledWOs?.length > 0 || details.reasonWOs?.length > 0) && (
+          {(details.overdueWOs.length > 0 || details.onTimeWOs.length > 0 || details.finEnabled || details.reasonWOs?.length > 0) && (
             <div>
               <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-amber-500" />
@@ -822,7 +834,6 @@ function RegionExpandedPanel({
                   { key: 'ontime',         label: lang === 'en' ? `On Track & Warning (${details.onTimeWOs.length})` : `المنتظم والتنبيه (${details.onTimeWOs.length})`, color: 'text-emerald-600' },
                   ...(details.finEnabled ? [{ key: 'fin', label: lang === 'en' ? `Financial (${details.finOverdueWOs.length + details.finOnTimeWOs.length})` : `المالي (${details.finOverdueWOs.length + details.finOnTimeWOs.length})`, color: 'text-indigo-600' } as any] : []),
                   ...(details.finEnabled && finJustifiedWOs.length > 0 ? [{ key: 'fin-justified', label: lang === 'en' ? `Financial Justified (${finJustifiedWOs.length})` : `المالي المسبب (${finJustifiedWOs.length})`, color: 'text-purple-600' } as any] : []),
-                  ...(details.includeCancelled && (details.cancelledWOs?.length ?? 0) > 0 ? [{ key: 'cancelled', label: lang === 'en' ? `Cancelled (${details.cancelledWOs?.length ?? 0})` : `الملغيات (${details.cancelledWOs?.length ?? 0})`, color: 'text-slate-600' } as any] : []),
                   ...(details.reasonWOs?.length > 0 ? [{ key: 'reasons', label: lang === 'en' ? `Reasons (${details.reasonWOs?.length ?? 0})` : `الأسباب (${details.reasonWOs?.length ?? 0})`, color: 'text-amber-700' } as any] : []),
                 ].map(tab => (
                   <button
@@ -882,13 +893,6 @@ function RegionExpandedPanel({
                   onOpenPicker={() => onOpenColPicker('FIN')}
                 />
               )}
-              {activeTab === 'cancelled' && details.includeCancelled && (
-                <WOTable
-                  wos={details.cancelledWOs ?? []} title={lang === 'en' ? 'Cancelled' : 'الملغيات'}
-                  tableKey="EXEC" selectedColKeys={execColKeys} allCols={allExecCols.length ? allExecCols : ALL_WO_COLS}
-                  onOpenPicker={() => onOpenColPicker('EXEC')}
-                />
-              )}
               {activeTab === 'reasons' && (
                 <WOTable
                   wos={details.reasonWOs ?? []} title={lang === 'en' ? 'Hold Reasons' : 'أسباب التعليق'}
@@ -941,7 +945,6 @@ export default function PeriodicKpiReport() {
   const [viewMode,          setViewMode]          = useState('all');
   const [searchText,        setSearchText]        = useState('');
   const [copySuccess,       setCopySuccess]       = useState(false);
-  const [includeCancelled,  setIncludeCancelled]  = useState(false);
   const [includeCompleted,  setIncludeCompleted]  = useState(true);
 
   // ── Column picker state
@@ -950,6 +953,247 @@ export default function PeriodicKpiReport() {
   const [reasonsColKeys, setReasonsColKeys] = useState<string[]>(DEFAULT_REASONS_COLS);
   const [pickerOpen,     setPickerOpen]     = useState<'EXEC' | 'FIN' | 'REASONS' | null>(null);
   const [catalogCols,    setCatalogCols]    = useState<{ key: string; labelAr: string; labelEn: string; dataType?: string }[]>([]);
+
+  // ── KPI drill-down drawer state (مغلقة لم تُفوتر) ───────────────────────
+  const [kpiDrawerOpen,    setKpiDrawerOpen]    = useState(false);
+  const [kpiDrawerRows,    setKpiDrawerRows]    = useState<any[]>([]);
+  const [kpiDrawerLoading, setKpiDrawerLoading] = useState(false);
+  const [kpiDrawerTotal,   setKpiDrawerTotal]   = useState(0);
+
+  // ── KPI drill-down drawer state (مفوتر ولم يصدر له شهادة إنجاز) ──────────
+  const [certDrawerOpen,    setCertDrawerOpen]    = useState(false);
+  const [certDrawerRows,    setCertDrawerRows]    = useState<any[]>([]);
+  const [certDrawerLoading, setCertDrawerLoading] = useState(false);
+  const [certDrawerTotal,   setCertDrawerTotal]   = useState(0);
+
+  // ── KPI drill-down drawer state (شهادات الإنجاز المكتملة) ────────────────
+  const COMP_CERT_MAX_COLS = 12;
+
+  // الأعمدة الخاصة بهذا الـ drawer (غير موجودة في columnCatalog)
+  const COMP_CERT_SPECIAL: { key: string; labelAr: string; labelEn: string; dataType: string }[] = useMemo(() => [
+    { key: 'regionNameAr',  labelAr: 'المنطقة',         labelEn: 'Region',         dataType: 'text' },
+    { key: 'sectorNameAr',  labelAr: 'القطاع',           labelEn: 'Sector',         dataType: 'text' },
+    { key: 'totalInvoiced', labelAr: 'الإجمالي المفوتر', labelEn: 'Total Invoiced', dataType: 'numeric' },
+  ], []);
+
+  // كل الأعمدة المتاحة = الخاصة + جميع أعمدة الكتالوج
+  // نستبعد sectorId و regionId لأنهما ممثَّلان بـ sectorNameAr و regionNameAr
+  const compCertAvailableCols = useMemo(() => {
+    const excludedKeys = new Set([
+      ...COMP_CERT_SPECIAL.map(c => c.key),
+      'sectorId', 'regionId',
+    ]);
+    return [
+      ...COMP_CERT_SPECIAL,
+      ...catalogCols.filter((c: { key: string }) => !excludedKeys.has(c.key)),
+    ];
+  }, [catalogCols, COMP_CERT_SPECIAL]);
+
+  // الأعمدة الافتراضية عند فتح الـ drawer (بدون الحي)
+  const COMP_CERT_DEFAULT_KEYS = [
+    'orderNumber', 'regionNameAr', 'sectorNameAr', 'invoiceType',
+    'proc155CloseDate', 'invoiceNumber', 'invoice1',
+    'invoice2Number', 'invoice2', 'totalInvoiced',
+  ];
+
+  const [compCertDrawerOpen,    setCompCertDrawerOpen]    = useState(false);
+  const [compCertDrawerRows,    setCompCertDrawerRows]    = useState<any[]>([]);
+  const [compCertDrawerLoading, setCompCertDrawerLoading] = useState(false);
+  const [compCertDrawerTotal,   setCompCertDrawerTotal]   = useState(0);
+  const [compCertColKeys,       setCompCertColKeys]       = useState<string[]>(COMP_CERT_DEFAULT_KEYS);
+  const [compCertPickerOpen,    setCompCertPickerOpen]    = useState(false);
+
+  // الأعمدة المرئية — بترتيب compCertColKeys (ترتيب القائمة في المودال)
+  const compCertVisibleCols = useMemo(() =>
+    compCertColKeys
+      .map((key: string) => compCertAvailableCols.find((c: { key: string }) => c.key === key))
+      .filter(Boolean) as { key: string; labelAr: string; labelEn: string; dataType?: string }[],
+  [compCertColKeys, compCertAvailableCols]);
+
+  // ── Shared special cols for new KpiDrawers ───────────────────────────────
+  const KD_REGION_SECTOR: KpiCol[] = useMemo(() => [
+    { key: 'regionNameAr',  labelAr: 'المنطقة',  labelEn: 'Region',  dataType: 'text' },
+    { key: 'sectorNameAr',  labelAr: 'القطاع',   labelEn: 'Sector',  dataType: 'text' },
+  ], []);
+
+  const KD_GENERAL_STATUS: KpiCol = { key: 'generalStatus', labelAr: 'الحالة', labelEn: 'Status', dataType: 'text', virtual: true };
+  const KD_METRIC_DAYS:    KpiCol = { key: 'metricDays',    labelAr: 'المدة (يوم)', labelEn: 'Days', dataType: 'integer', virtual: true };
+
+  // Base available cols for drawers (catalog + region/sector, exclude raw IDs)
+  const kdBaseCols: KpiCol[] = useMemo(() => {
+    const excluded = new Set(['sectorId', 'regionId']);
+    return [
+      ...KD_REGION_SECTOR,
+      ...catalogCols.filter((c: { key: string }) => !excluded.has(c.key)),
+    ];
+  }, [catalogCols, KD_REGION_SECTOR]);
+
+  // Status drawer
+  const [statusDrawer, setStatusDrawer] = useState<{ status: string; rows: any[]; loading: boolean } | null>(null);
+  const [statusDrawerColKeys, setStatusDrawerColKeys] = useState<string[]>([
+    'orderNumber', 'projectType', 'district', 'regionNameAr', 'sectorNameAr', 'assignmentDate', 'generalStatus',
+  ]);
+  const statusDrawerAvailCols: KpiCol[] = useMemo(() => [
+    KD_GENERAL_STATUS,
+    ...kdBaseCols,
+  ], [kdBaseCols]);
+
+  // Metric drawer
+  const [metricDrawer, setMetricDrawer] = useState<{ code: string; nameAr: string; nameEn: string | null; rows: any[]; loading: boolean } | null>(null);
+  const [metricDrawerColKeys, setMetricDrawerColKeys] = useState<string[]>([
+    'orderNumber', 'projectType', 'district', 'regionNameAr', 'sectorNameAr', 'assignmentDate', 'metricDays',
+  ]);
+  const metricDrawerAvailCols: KpiCol[] = useMemo(() => [
+    KD_METRIC_DAYS,
+    ...kdBaseCols,
+  ], [kdBaseCols]);
+
+  // Billing drawer
+  const [billingDrawer, setBillingDrawer] = useState<{ type: 'partialBilled' | 'notFullyBilled'; rows: any[]; loading: boolean } | null>(null);
+  const [billingDrawerColKeys, setBillingDrawerColKeys] = useState<string[]>([
+    'orderNumber', 'invoiceType', 'invoice1', 'invoice2', 'collectedAmount', 'estimatedValue', 'regionNameAr', 'sectorNameAr',
+  ]);
+  const billingDrawerAvailCols: KpiCol[] = useMemo(() => kdBaseCols, [kdBaseCols]);
+
+  // ── Helper: build common query params from appliedFilters ───────────────
+  const buildKdParams = useCallback((af: typeof appliedFilters) => {
+    if (!af) return null;
+    const p = new URLSearchParams();
+    if (af.from) p.set('from', af.from);
+    if (af.to)   p.set('to',   af.to);
+    if (af.sectorId)    p.set('sectorId',    af.sectorId);
+    if (af.regionId)    p.set('regionId',    af.regionId);
+    if (af.projectType) p.set('projectType', af.projectType);
+    if (af.dateBasisType !== 'CREATED_AT') {
+      p.set('dateBasisType', af.dateBasisType);
+      if (af.dateBasisColumnKey) p.set('dateBasisColumnKey', af.dateBasisColumnKey);
+    }
+    p.set('includeCompleted', String(includeCompleted));
+    return p;
+  }, [appliedFilters, includeCompleted]);
+
+  // ── Open: status drawer ──────────────────────────────────────────────────
+  const openStatusDrawer = useCallback(async (status: string) => {
+    if (!appliedFilters) return;
+    setStatusDrawer({ status, rows: [], loading: true });
+    try {
+      const p = buildKdParams(appliedFilters)!;
+      p.set('status', status);
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/by-status?${p}`);
+      setStatusDrawer({ status, rows: res.data.rows ?? [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setStatusDrawer({ status, rows: [], loading: false });
+    }
+  }, [appliedFilters, buildKdParams]);
+
+  // ── Open: metric drawer ──────────────────────────────────────────────────
+  const openMetricDrawer = useCallback(async (code: string, nameAr: string, nameEn: string | null) => {
+    if (!appliedFilters) return;
+    setMetricDrawer({ code, nameAr, nameEn, rows: [], loading: true });
+    try {
+      const p = buildKdParams(appliedFilters)!;
+      p.set('metricCode', code);
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/metric-orders?${p}`);
+      setMetricDrawer({ code, nameAr, nameEn, rows: res.data.rows ?? [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setMetricDrawer({ code, nameAr, nameEn, rows: [], loading: false });
+    }
+  }, [appliedFilters, buildKdParams]);
+
+  // ── Open: billing drawer ─────────────────────────────────────────────────
+  const openBillingDrawer = useCallback(async (type: 'partialBilled' | 'notFullyBilled') => {
+    if (!appliedFilters) return;
+    setBillingDrawer({ type, rows: [], loading: true });
+    try {
+      const p = buildKdParams(appliedFilters)!;
+      p.set('type', type);
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/partial-billed-orders?${p}`);
+      setBillingDrawer({ type, rows: res.data.rows ?? [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setBillingDrawer({ type, rows: [], loading: false });
+    }
+  }, [appliedFilters, buildKdParams]);
+
+  // دوال التنسيق المشتركة بين الجدول والـ export
+  const ccToSnake  = (s: string) => s.replace(/([A-Z])/g, '_$1').toLowerCase();
+  const ccGetVal   = (row: any, key: string) => row[key] ?? row[ccToSnake(key)];
+  const ccIsNum    = (col: { dataType?: string; key?: string }) =>
+    ['numeric','integer','float','decimal'].includes(col.dataType ?? '') || col.key === 'totalInvoiced';
+  const ccIsDate   = (col: { dataType?: string }) =>
+    ['date','timestamp','timestamp with time zone'].includes(col.dataType ?? '');
+  const ccFmtNum   = (v: any) => v != null && v !== '' ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+  const ccFmtDate  = (v: any) => { try { return v ? new Date(v).toLocaleDateString('en-CA') : '—'; } catch { return '—'; } };
+  const ccFmtCell  = (v: any, col: { dataType?: string; key?: string }) =>
+    ccIsDate(col) ? ccFmtDate(v) : ccIsNum(col) ? ccFmtNum(v) : (v ?? '—');
+
+  const openCompletedWithCertDrawer = useCallback(async () => {
+    if (!appliedFilters) return;
+    setCompCertDrawerOpen(true);
+    setCompCertDrawerLoading(true);
+    try {
+      const p = new URLSearchParams();
+      if (appliedFilters.from) p.set('from', appliedFilters.from);
+      if (appliedFilters.to)   p.set('to',   appliedFilters.to);
+      if (appliedFilters.sectorId)    p.set('sectorId',    appliedFilters.sectorId);
+      if (appliedFilters.regionId)    p.set('regionId',    appliedFilters.regionId);
+      if (appliedFilters.projectType) p.set('projectType', appliedFilters.projectType);
+      if (appliedFilters.dateBasisType !== 'CREATED_AT') {
+        p.set('dateBasisType', appliedFilters.dateBasisType);
+        if (appliedFilters.dateBasisColumnKey) p.set('dateBasisColumnKey', appliedFilters.dateBasisColumnKey);
+      }
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/completed-with-cert?${p}`);
+      setCompCertDrawerRows(res.data.rows ?? []);
+      setCompCertDrawerTotal(res.data.totalValue ?? 0);
+    } catch (e) { console.error(e); }
+    finally { setCompCertDrawerLoading(false); }
+  }, [appliedFilters]);
+
+  const openInvoicedNoCertDrawer = useCallback(async () => {
+    if (!appliedFilters) return;
+    setCertDrawerOpen(true);
+    setCertDrawerLoading(true);
+    try {
+      const p = new URLSearchParams();
+      if (appliedFilters.from) p.set('from', appliedFilters.from);
+      if (appliedFilters.to)   p.set('to',   appliedFilters.to);
+      if (appliedFilters.sectorId)    p.set('sectorId',    appliedFilters.sectorId);
+      if (appliedFilters.regionId)    p.set('regionId',    appliedFilters.regionId);
+      if (appliedFilters.projectType) p.set('projectType', appliedFilters.projectType);
+      if (appliedFilters.dateBasisType !== 'CREATED_AT') {
+        p.set('dateBasisType', appliedFilters.dateBasisType);
+        if (appliedFilters.dateBasisColumnKey) p.set('dateBasisColumnKey', appliedFilters.dateBasisColumnKey);
+      }
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/invoiced-no-cert?${p}`);
+      setCertDrawerRows(res.data.rows ?? []);
+      setCertDrawerTotal(res.data.totalValue ?? 0);
+    } catch (e) { console.error(e); }
+    finally { setCertDrawerLoading(false); }
+  }, [appliedFilters]);
+
+  const openClosedNotInvoicedDrawer = useCallback(async () => {
+    if (!appliedFilters) return;
+    setKpiDrawerOpen(true);
+    setKpiDrawerLoading(true);
+    try {
+      const p = new URLSearchParams();
+      if (appliedFilters.from) p.set('from', appliedFilters.from);
+      if (appliedFilters.to)   p.set('to',   appliedFilters.to);
+      if (appliedFilters.sectorId)    p.set('sectorId',    appliedFilters.sectorId);
+      if (appliedFilters.regionId)    p.set('regionId',    appliedFilters.regionId);
+      if (appliedFilters.projectType) p.set('projectType', appliedFilters.projectType);
+      if (appliedFilters.dateBasisType !== 'CREATED_AT') {
+        p.set('dateBasisType', appliedFilters.dateBasisType);
+        if (appliedFilters.dateBasisColumnKey) p.set('dateBasisColumnKey', appliedFilters.dateBasisColumnKey);
+      }
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/closed-not-invoiced?${p}`);
+      setKpiDrawerRows(res.data.rows ?? []);
+      setKpiDrawerTotal(res.data.totalValue ?? 0);
+    } catch (e) { console.error(e); }
+    finally { setKpiDrawerLoading(false); }
+  }, [appliedFilters]);
 
   // ── Load config once ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -1030,7 +1274,7 @@ export default function PeriodicKpiReport() {
   };
 
   // ── Query string builder ──────────────────────────────────────────────────
-  const buildQS = (f: Filters, incCancelled: boolean, incCompleted: boolean) => {
+  const buildQS = (f: Filters, incCompleted: boolean) => {
     const p = new URLSearchParams();
     if (f.sectorId)    p.set('sectorId',    f.sectorId);
     if (f.regionId)    p.set('regionId',    f.regionId);
@@ -1041,13 +1285,12 @@ export default function PeriodicKpiReport() {
       p.set('dateBasisType', f.dateBasisType);
       if (f.dateBasisColumnKey) p.set('dateBasisColumnKey', f.dateBasisColumnKey);
     }
-    p.set('includeCancelled', String(incCancelled));
     p.set('includeCompleted', String(incCompleted));
     return p.toString();
   };
 
-  const fetchData = useCallback(async (f: Filters, incCancelled: boolean, incCompleted: boolean) => {
-    const qs = buildQS(f, incCancelled, incCompleted);
+  const fetchData = useCallback(async (f: Filters, incCompleted: boolean) => {
+    const qs = buildQS(f, incCompleted);
     setLoadingSummary(true); setLoadingRegions(true);
     try {
       const [sumRes, regRes] = await Promise.all([
@@ -1061,10 +1304,10 @@ export default function PeriodicKpiReport() {
   }, []);
 
   useEffect(() => {
-    if (appliedFilters) fetchData(appliedFilters, includeCancelled, includeCompleted);
-  }, [appliedFilters, fetchData, includeCancelled, includeCompleted]);
+    if (appliedFilters) fetchData(appliedFilters, includeCompleted);
+  }, [appliedFilters, fetchData, includeCompleted]);
 
-  const fetchDetails = useCallback(async (region: RegionCard, f: Filters, incCancelled: boolean, incCompleted: boolean) => {
+  const fetchDetails = useCallback(async (region: RegionCard, f: Filters, incCompleted: boolean) => {
     setLoadingDetails(true); setRegionDetails(null);
     try {
       const p = new URLSearchParams();
@@ -1075,7 +1318,6 @@ export default function PeriodicKpiReport() {
         p.set('dateBasisType', f.dateBasisType);
         if (f.dateBasisColumnKey) p.set('dateBasisColumnKey', f.dateBasisColumnKey);
       }
-      p.set('includeCancelled', String(incCancelled));
       p.set('includeCompleted', String(incCompleted));
       const res = await api.get(`/reports/periodic-kpis/region/${region.id}/details?${p}`);
       setRegionDetails(res.data);
@@ -1086,7 +1328,7 @@ export default function PeriodicKpiReport() {
   // ── Actions ───────────────────────────────────────────────────────────────
   const handleRegionClick = (region: RegionCard) => {
     setExpandedRegion(region);
-    if (appliedFilters) fetchDetails(region, appliedFilters, includeCancelled, includeCompleted);
+    if (appliedFilters) fetchDetails(region, appliedFilters, includeCompleted);
   };
 
   const handleApply = () => {
@@ -1109,7 +1351,7 @@ export default function PeriodicKpiReport() {
     setFilters(reset); setAppliedFilters(reset);
     setExpandedRegion(null); setRegionDetails(null);
     setViewMode('all'); setSearchText('');
-    setIncludeCancelled(false); setIncludeCompleted(true);
+    setIncludeCompleted(true);
   };
 
   const saveColPrefs = async (tableKey: 'EXEC' | 'FIN' | 'REASONS', keys: string[]) => {
@@ -1142,8 +1384,8 @@ export default function PeriodicKpiReport() {
     rows.push([]);
 
     rows.push([en ? '── SUMMARY ──' : '── الملخص الإجمالي ──']);
-    rows.push([en ? 'Total' : 'الإجمالي', en ? 'Overdue' : 'متأخر', en ? 'Warning' : 'تنبيه', en ? 'On Track' : 'منتظم', en ? 'Done' : 'منجز', en ? 'Cancelled' : 'ملغي']);
-    rows.push([summary?.total ?? '', summary?.overdue ?? '', summary?.warning ?? '', summary?.onTime ?? '', summary?.completed ?? '', summary?.cancelled ?? '']);
+    rows.push([en ? 'Total' : 'الإجمالي', en ? 'Overdue' : 'متأخر', en ? 'Warning' : 'تنبيه', en ? 'On Track' : 'منتظم', en ? 'Done' : 'منجز']);
+    rows.push([summary?.total ?? '', summary?.overdue ?? '', summary?.warning ?? '', summary?.onTime ?? '', summary?.completed ?? '']);
     rows.push([]);
 
     if (timeDiff.length > 0) {
@@ -1165,8 +1407,8 @@ export default function PeriodicKpiReport() {
     );
     rows.push([
       ...(en
-        ? ['Region', 'Sector', 'Total', 'Active', 'Overdue', 'Overdue (Justified)', 'Warning', 'On Track', 'Done', 'Cancelled']
-        : ['المنطقة', 'القطاع', 'الإجمالي', 'نشطة', 'متأخر', 'متأخر مسبب', 'تنبيه', 'منتظم', 'منجز', 'ملغي']),
+        ? ['Region', 'Sector', 'Total', 'Active', 'Overdue', 'Overdue (Justified)', 'Warning', 'On Track', 'Done']
+        : ['المنطقة', 'القطاع', 'الإجمالي', 'نشطة', 'متأخر', 'متأخر مسبب', 'تنبيه', 'منتظم', 'منجز']),
       ...metricCols,
     ]);
     visibleRegionCards.forEach(r => {
@@ -1174,7 +1416,7 @@ export default function PeriodicKpiReport() {
         const rm = r.metricsAverages?.find(rm2 => rm2.code === m.code);
         return rm?.avgDays != null ? rm.avgDays : '—';
       });
-      rows.push([rn(r), sn(r), r.total, r.active, r.execDelayedUnjustified ?? r.overdue, r.execDelayedJustified ?? 0, r.warning, r.onTime, r.completed, r.cancelled, ...regionMetrics]);
+      rows.push([rn(r), sn(r), r.total, r.active, r.execDelayedUnjustified ?? r.overdue, r.execDelayedJustified ?? 0, r.warning, r.onTime, r.completed, ...regionMetrics]);
     });
 
     const csv = rows.map(row => row.map(cell => String(cell ?? '')).join('\t')).join('\n');
@@ -1314,7 +1556,7 @@ export default function PeriodicKpiReport() {
             </button>
             <button
               data-testid="button-refresh"
-              onClick={() => appliedFilters && fetchData(appliedFilters, includeCancelled, includeCompleted)}
+              onClick={() => appliedFilters && fetchData(appliedFilters, includeCompleted)}
               disabled={loadingSummary || loadingRegions}
               className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-indigo-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
             >
@@ -1500,7 +1742,6 @@ export default function PeriodicKpiReport() {
           <div className="flex flex-wrap items-center gap-4 pt-1 border-t border-slate-100">
             <span className="text-xs font-medium text-slate-500 shrink-0">{lang === 'en' ? 'Include Status:' : 'تضمين الحالات:'}</span>
             {[
-              { key: 'includeCancelled', label: lang === 'en' ? 'Cancelled' : 'الملغية', value: includeCancelled, set: setIncludeCancelled },
               { key: 'includeCompleted', label: lang === 'en' ? 'Completed' : 'المنجزة',  value: includeCompleted, set: setIncludeCompleted },
             ].map(({ key, label, value, set }) => (
               <label key={key} data-testid={`checkbox-${key}`}
@@ -1521,73 +1762,72 @@ export default function PeriodicKpiReport() {
 
         {/* ══ SUMMARY CARDS ══════════════════════════════════════════════════ */}
         {loadingSummary ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {Array.from({ length: 6 }).map((_, i) => (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="rounded-xl border border-slate-200 bg-white h-24 animate-pulse" />
             ))}
           </div>
         ) : summary && (
           <>
-            {/* Cards — RTL order (first HTML = rightmost): متأخرة · تنبيه · منتظمة · منجزة · ملغية · الإجمالي */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* Cards — RTL order (first HTML = rightmost): متأخرة · تنبيه · منتظمة · منجزة · الإجمالي */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {/* Each card shows a unique-WO count (generalStatus). execVal/finVal are informational breakdown only. */}
               <StatCard
                 label={lang === 'en' ? 'Overdue' : 'متأخرة'}
-                value={summary.finEnabled && summary.finCounts ? summary.overdue + summary.finCounts.overdue : summary.overdue}
+                value={summary.overdue}
                 icon={AlertTriangle}
                 colorCls={summary.overdue > 0 ? 'border-red-200 bg-red-50/30' : 'border-slate-200'}
-                execVal={summary.finEnabled && summary.finCounts ? summary.overdue : undefined}
-                finVal={summary.finEnabled && summary.finCounts ? summary.finCounts.overdue : undefined}
+                execVal={summary.finEnabled ? summary.execBreakdown?.overdue : undefined}
+                finVal={summary.finEnabled ? summary.finCounts?.overdue : undefined}
+                onClick={() => openStatusDrawer('OVERDUE')}
               />
               <StatCard
                 label={lang === 'en' ? 'Warning' : 'تنبيه'}
-                value={summary.warning + (summary.finEnabled && summary.finCounts ? summary.finCounts.warning : 0)}
+                value={summary.warning}
                 icon={Clock}
                 colorCls={summary.warning > 0 ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200'}
-                execVal={summary.finEnabled ? summary.warning : undefined}
-                finVal={summary.finEnabled ? (summary.finCounts?.warning ?? 0) : undefined}
+                execVal={summary.finEnabled ? summary.execBreakdown?.warning : undefined}
+                finVal={summary.finEnabled ? summary.finCounts?.warning : undefined}
+                onClick={() => openStatusDrawer('WARNING')}
               />
               <StatCard
                 label={lang === 'en' ? 'On Track' : 'منتظمة'}
-                value={summary.onTime + (summary.finEnabled && summary.finCounts ? summary.finCounts.onTime : 0)}
+                value={summary.onTime}
                 icon={CheckCircle2}
                 colorCls="border-emerald-50"
-                execVal={summary.finEnabled ? summary.onTime : undefined}
-                finVal={summary.finEnabled ? (summary.finCounts?.onTime ?? 0) : undefined}
+                execVal={summary.finEnabled ? summary.execBreakdown?.onTime : undefined}
+                finVal={summary.finEnabled ? summary.finCounts?.onTime : undefined}
+                onClick={() => openStatusDrawer('ON_TIME')}
               />
               <StatCard
                 label={lang === 'en' ? 'Done' : 'منجزة'}
-                value={summary.finEnabled && summary.finCounts ? summary.completed + summary.finCounts.completed : summary.completed}
+                value={summary.completed}
                 icon={CheckCircle2}
                 colorCls="border-emerald-100"
-                execVal={summary.finEnabled && summary.finCounts ? summary.completed : undefined}
-                finVal={summary.finEnabled && summary.finCounts ? summary.finCounts.completed : undefined}
-              />
-              <StatCard
-                label={lang === 'en' ? 'Cancelled' : 'ملغية'}
-                value={summary.cancelled}
-                icon={XCircle}
-                colorCls="border-slate-200"
-                execVal={summary.finEnabled ? summary.cancelled : undefined}
-                finVal={summary.finEnabled ? 0 : undefined}
+                execVal={summary.finEnabled ? summary.execBreakdown?.completed : undefined}
+                finVal={summary.finEnabled ? summary.finCounts?.completed : undefined}
+                onClick={() => openStatusDrawer('COMPLETED')}
               />
               <StatCard
                 label={lang === 'en' ? 'Total Period' : 'الإجمالي ضمن الفترة'}
-                value={summary.finEnabled && summary.finCounts ? summary.total + summary.finCounts.total : summary.total}
+                value={summary.total}
                 icon={BarChart2}
-                execVal={summary.finEnabled && summary.finCounts ? summary.total : undefined}
-                finVal={summary.finEnabled && summary.finCounts ? summary.finCounts.total : undefined}
+                execVal={summary.finEnabled ? summary.total - (summary.finCounts?.total ?? 0) : undefined}
+                finVal={summary.finEnabled ? (summary.finCounts?.total ?? 0) : undefined}
+                onClick={() => openStatusDrawer('ALL')}
               />
             </div>
 
             {/* Billing counts badges */}
-            {summary.billingCounts && (summary.billingCounts.partialBilled > 0 || summary.billingCounts.notFullyBilled > 0) && (
+            {summary.billingCounts && summary.billingCounts.partialBilled > 0 && (
               <div className="flex flex-wrap gap-3">
-                {summary.billingCounts.partialBilled > 0 && (
-                  <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 shadow-sm">
-                    <span className="text-xl font-bold text-indigo-700">{summary.billingCounts.partialBilled}</span>
-                    <span className="text-xs font-medium text-indigo-600">{lang === 'en' ? 'Partially Billed' : 'مفوتر جزئياً'}</span>
-                  </div>
-                )}
+                <div
+                  className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 shadow-sm cursor-pointer hover:ring-2 hover:ring-indigo-300 transition-shadow"
+                  onClick={() => openBillingDrawer('partialBilled')}
+                >
+                  <span className="text-xl font-bold text-indigo-700">{summary.billingCounts.partialBilled}</span>
+                  <span className="text-xs font-medium text-indigo-600">{lang === 'en' ? 'Partially Billed' : 'مفوتر جزئياً'}</span>
+                </div>
               </div>
             )}
 
@@ -1603,8 +1843,8 @@ export default function PeriodicKpiReport() {
                         <Clock className="w-3.5 h-3.5 text-indigo-400" />
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Performance Time Averages' : 'متوسطات الأداء الزمنية'}</span>
                       </div>
-                      <div className="flex gap-3 flex-wrap items-stretch">
-                        {dateDiff.map(m => <div key={m.nameAr} style={{ flex: '1 1 150px' }}><MetricCard m={m} /></div>)}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
+                        {dateDiff.map(m => <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>)}
                       </div>
                     </div>
                   )}
@@ -1614,40 +1854,138 @@ export default function PeriodicKpiReport() {
                         <BarChart2 className="w-3.5 h-3.5 text-violet-400" />
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Quantity Indicators' : 'مؤشرات كمية'}</span>
                       </div>
-                      <div className="flex gap-3 flex-wrap items-stretch">
-                        {numericAgg.map(m => <div key={m.nameAr} style={{ flex: '1 1 150px' }}><MetricCard m={m} /></div>)}
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-stretch">
+                        {numericAgg.map(m => <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>)}
                         {/* كرت: مغلقة لم تُفوتر */}
                         {summary.kpiAlerts && (
-                          <div style={{ flex: '1 1 150px' }}>
-                            <div className={`rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm h-full ${
-                              summary.kpiAlerts.closedNotInvoiced > 0 ? 'border-orange-200 bg-orange-50/30' : 'border-slate-200'
-                            }`}>
+                          <div>
+                            <button
+                              onClick={openClosedNotInvoicedDrawer}
+                              className={`w-full text-right rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm h-full transition-shadow hover:shadow-md cursor-pointer ${
+                                summary.kpiAlerts.closedNotInvoiced > 0 ? 'border-indigo-200 bg-indigo-50/30 hover:border-indigo-300' : 'border-slate-200 hover:border-slate-300'
+                              }`}
+                            >
                               <div className="flex items-center justify-between">
-                                <span className="text-xs font-medium text-slate-500">{lang === 'en' ? 'Closed w/o Invoice' : 'مغلقة لم تُفوتر'}</span>
-                                <FileX2 className={`w-4 h-4 ${summary.kpiAlerts.closedNotInvoiced > 0 ? 'text-orange-400' : 'text-slate-300'}`} />
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-medium text-slate-500">{lang === 'en' ? 'Closed w/o Invoice' : 'مغلقة لم تُفوتر'}</span>
+                                  <span className="relative group shrink-0">
+                                    <svg className="w-3.5 h-3.5 text-slate-300 hover:text-indigo-400 cursor-help transition-colors" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                    <span className="pointer-events-none absolute z-50 bottom-full mb-2 right-0 w-60 bg-slate-800 text-white text-[11px] leading-snug rounded-lg px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl whitespace-normal" dir="rtl">
+                                      {lang === 'en'
+                                        ? 'Work orders where: 155 procedure date exists · not cancelled · invoice 1 value is still zero'
+                                        : 'أوامر العمل التي:\n• تاريخ إجراء 155 موجود\n• ليست ملغية\n• قيمة م.1 لا تزال صفراً (نهائي وجزئي)'}
+                                      <span className="absolute top-full right-2 border-4 border-transparent border-t-slate-800" />
+                                    </span>
+                                  </span>
+                                </div>
+                                <FileX2 className={`w-4 h-4 ${summary.kpiAlerts.closedNotInvoiced > 0 ? 'text-indigo-400' : 'text-slate-300'}`} />
                               </div>
-                              <div className={`text-2xl font-bold ${summary.kpiAlerts.closedNotInvoiced > 0 ? 'text-orange-600' : 'text-slate-400'}`}>
+                              <div className={`text-2xl font-bold ${summary.kpiAlerts.closedNotInvoiced > 0 ? 'text-indigo-600' : 'text-slate-400'}`}>
                                 {summary.kpiAlerts.closedNotInvoiced}
                               </div>
                               <div className="text-xs text-slate-400">{lang === 'en' ? 'work orders' : 'أمر عمل'}</div>
-                            </div>
+                              {summary.kpiAlerts.closedNotInvoiced > 0 && summary.kpiAlerts.closedNotInvoicedValue > 0 && (
+                                <div className="mt-1 pt-1 border-t border-indigo-100">
+                                  <span className="text-xs font-semibold text-indigo-500">
+                                    ~{summary.kpiAlerts.closedNotInvoicedValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 mr-1">{lang === 'en' ? 'SAR (est.)' : 'ر.س (تقريبي)'}</span>
+                                </div>
+                              )}
+                              <div className="mt-auto pt-1">
+                                <span className="text-[10px] text-slate-400 underline underline-offset-2">{lang === 'en' ? 'Click to view details' : 'اضغط لعرض التفاصيل'}</span>
+                              </div>
+                            </button>
                           </div>
                         )}
-                        {/* كرت: فُوتر بلا شهادة إنجاز */}
+                        {/* كرت: مفوتر ولم يصدر له شهادة إنجاز */}
                         {summary.kpiAlerts && (
-                          <div style={{ flex: '1 1 150px' }}>
-                            <div className={`rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm h-full ${
-                              summary.kpiAlerts.invoicedNoCert > 0 ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200'
-                            }`}>
+                          <div>
+                            <button
+                              onClick={openInvoicedNoCertDrawer}
+                              className={`w-full text-right rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm h-full transition-shadow hover:shadow-md cursor-pointer ${
+                                summary.kpiAlerts.invoicedNoCert > 0 ? 'border-indigo-200 bg-indigo-50/30 hover:border-indigo-300' : 'border-slate-200 hover:border-slate-300'
+                              }`}
+                            >
                               <div className="flex items-center justify-between">
-                                <span className="text-xs font-medium text-slate-500">{lang === 'en' ? 'Invoiced — No Cert' : 'فُوتر — بلا شهادة إنجاز'}</span>
-                                <BadgeAlert className={`w-4 h-4 ${summary.kpiAlerts.invoicedNoCert > 0 ? 'text-amber-400' : 'text-slate-300'}`} />
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-medium text-slate-500">{lang === 'en' ? 'Invoiced — No Cert' : 'مفوتر ولم يصدر له شهادة إنجاز'}</span>
+                                  <span className="relative group shrink-0">
+                                    <svg className="w-3.5 h-3.5 text-slate-300 hover:text-indigo-400 cursor-help transition-colors" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                    <span className="pointer-events-none absolute z-50 bottom-full mb-2 right-0 w-60 bg-slate-800 text-white text-[11px] leading-snug rounded-lg px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl whitespace-normal" dir="rtl">
+                                      {lang === 'en'
+                                        ? 'Work orders where: 155 date exists · cert not confirmed · invoice 1 value exists · invoice 2 value is empty'
+                                        : 'أوامر العمل التي:\n• تاريخ إجراء 155 موجود\n• شهادة الإنجاز لم تُؤكَّد\n• قيمة م.1 موجودة\n• قيمة م.2 فارغة\nالقيمة = م.2 المتبقي (تقديري = م.1)'}
+                                      <span className="absolute top-full right-2 border-4 border-transparent border-t-slate-800" />
+                                    </span>
+                                  </span>
+                                </div>
+                                <BadgeAlert className={`w-4 h-4 ${summary.kpiAlerts.invoicedNoCert > 0 ? 'text-indigo-400' : 'text-slate-300'}`} />
                               </div>
-                              <div className={`text-2xl font-bold ${summary.kpiAlerts.invoicedNoCert > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                              <div className={`text-2xl font-bold ${summary.kpiAlerts.invoicedNoCert > 0 ? 'text-indigo-600' : 'text-slate-400'}`}>
                                 {summary.kpiAlerts.invoicedNoCert}
                               </div>
                               <div className="text-xs text-slate-400">{lang === 'en' ? 'work orders' : 'أمر عمل'}</div>
-                            </div>
+                              {summary.kpiAlerts.invoicedNoCert > 0 && (summary.kpiAlerts.invoicedNoCertValue ?? 0) > 0 && (
+                                <div className="mt-1 pt-1 border-t border-indigo-100">
+                                  <span className="text-xs font-semibold text-indigo-500">
+                                    ~{(summary.kpiAlerts.invoicedNoCertValue ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 mr-1">{lang === 'en' ? 'SAR (est. inv.2)' : 'ر.س (م.2 تقديري)'}</span>
+                                </div>
+                              )}
+                              <div className="mt-auto pt-1">
+                                <span className="text-[10px] text-slate-400 underline underline-offset-2">{lang === 'en' ? 'Click to view details' : 'اضغط لعرض التفاصيل'}</span>
+                              </div>
+                            </button>
+                          </div>
+                        )}
+                        {/* كرت: شهادات الإنجاز المكتملة */}
+                        {summary.kpiAlerts && (
+                          <div>
+                            <button
+                              onClick={openCompletedWithCertDrawer}
+                              className={`w-full text-right rounded-xl border p-4 flex flex-col gap-1 bg-white shadow-sm h-full transition-shadow hover:shadow-md cursor-pointer ${
+                                (summary.kpiAlerts.completedWithCert ?? 0) > 0 ? 'border-indigo-200 bg-indigo-50/30 hover:border-indigo-300' : 'border-slate-200 hover:border-slate-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-medium text-slate-500">{lang === 'en' ? 'Completed w/ Cert' : 'شهادات الإنجاز المكتملة'}</span>
+                                  <span className="relative group shrink-0">
+                                    <svg className="w-3.5 h-3.5 text-slate-300 hover:text-indigo-400 cursor-help transition-colors" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                    <span className="pointer-events-none absolute z-50 bottom-full mb-2 right-0 w-60 bg-slate-800 text-white text-[11px] leading-snug rounded-lg px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl whitespace-normal" dir="rtl">
+                                      {lang === 'en'
+                                        ? 'Work orders where: 155 date exists · cert confirmed · partial: inv.1 & inv.2 both filled · final: inv.1 filled\nValue = total invoiced amount'
+                                        : 'أوامر العمل التي:\n• تاريخ إجراء 155 موجود\n• شهادة الإنجاز مؤكدة\n• جزئي: قيمة م.1 وم.2 موجودتان\n• نهائي: قيمة م.1 موجودة\nالقيمة = إجمالي المفوتر'}
+                                      <span className="absolute top-full right-2 border-4 border-transparent border-t-slate-800" />
+                                    </span>
+                                  </span>
+                                </div>
+                                <BadgeCheck className={`w-4 h-4 ${(summary.kpiAlerts.completedWithCert ?? 0) > 0 ? 'text-indigo-400' : 'text-slate-300'}`} />
+                              </div>
+                              <div className={`text-2xl font-bold ${(summary.kpiAlerts.completedWithCert ?? 0) > 0 ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                {summary.kpiAlerts.completedWithCert ?? 0}
+                              </div>
+                              <div className="text-xs text-slate-400">{lang === 'en' ? 'work orders' : 'أمر عمل'}</div>
+                              {(summary.kpiAlerts.completedWithCert ?? 0) > 0 && (summary.kpiAlerts.completedWithCertValue ?? 0) > 0 && (
+                                <div className="mt-1 pt-1 border-t border-indigo-100">
+                                  <span className="text-xs font-semibold text-indigo-500">
+                                    ~{(summary.kpiAlerts.completedWithCertValue ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 mr-1">{lang === 'en' ? 'SAR (invoiced)' : 'ر.س (مفوتر)'}</span>
+                                </div>
+                              )}
+                              <div className="mt-auto pt-1">
+                                <span className="text-[10px] text-slate-400 underline underline-offset-2">{lang === 'en' ? 'Click to view details' : 'اضغط لعرض التفاصيل'}</span>
+                              </div>
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1800,6 +2138,676 @@ export default function PeriodicKpiReport() {
           onClose={() => setPickerOpen(null)}
         />
       )}
+
+      {/* ── مغلقة لم تُفوتر — Drill-down Drawer ──────────────────────────── */}
+      {kpiDrawerOpen && (
+        <>
+          {/* Overlay */}
+          <div
+            className="fixed inset-0 bg-black/30 z-40"
+            onClick={() => setKpiDrawerOpen(false)}
+          />
+          {/* Panel */}
+          <div
+            className="fixed top-0 right-0 h-full w-full max-w-5xl bg-white shadow-2xl z-50 flex flex-col"
+            dir="rtl"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-indigo-50/60 print:hidden">
+              <div className="flex items-center gap-2">
+                <FileX2 className="w-5 h-5 text-indigo-500" />
+                <span className="font-semibold text-slate-800 text-sm">
+                  {lang === 'en' ? 'Closed w/o Invoice' : 'مغلقة لم تُفوتر'}
+                </span>
+                {!kpiDrawerLoading && (
+                  <span className="text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">
+                    {kpiDrawerRows.length} {lang === 'en' ? 'orders' : 'أمر'}
+                    {kpiDrawerTotal > 0 && (
+                      <span className="mr-1">
+                        · ~{kpiDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} {lang === 'en' ? 'SAR' : 'ر.س'}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Export Excel */}
+                <button
+                  onClick={async () => {
+                    try {
+                      const ExcelJS = (await import('exceljs')).default;
+                      const wb = new ExcelJS.Workbook();
+                      const ws = wb.addWorksheet(lang === 'en' ? 'Closed w/o Invoice' : 'مغلقة لم تُفوتر');
+                      ws.views = [{ rightToLeft: lang !== 'en' }];
+                      const headers = lang === 'en'
+                        ? ['Work Order','District','Region','Sector','Invoice Type','155 Close Date','Financial Close Date','Inv.1 No.','Inv.1 Value','Inv.2 No.','Inv.2 Value','Est. Value','Approx. Unbilled']
+                        : ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ إجراء 155','تاريخ الإغلاق المالي','رقم م.1','قيمة م.1','رقم م.2','قيمة م.2','القيمة التقديرية','القيمة غير المفوترة (تقريبي)'];
+                      ws.addRow(headers).font = { bold: true };
+                      kpiDrawerRows.forEach(r => {
+                        ws.addRow([
+                          r.orderNumber, r.district, r.regionNameAr, r.sectorNameAr,
+                          r.invoiceType,
+                          r.proc155CloseDate ? new Date(r.proc155CloseDate).toLocaleDateString('en-CA') : '',
+                          r.financialCloseDate ? new Date(r.financialCloseDate).toLocaleDateString('en-CA') : '',
+                          r.invoiceNumber, r.invoice1, r.invoice2Number, r.invoice2,
+                          r.estimatedValue, r.approxValue,
+                        ]);
+                      });
+                      ws.columns.forEach(col => { col.width = 18; });
+                      const buf = await wb.xlsx.writeBuffer();
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+                      a.download = `closed-not-invoiced-${new Date().toISOString().slice(0,10)}.xlsx`;
+                      a.click();
+                    } catch(e) { console.error(e); }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Excel' : 'Excel'}
+                </button>
+                {/* Print */}
+                <button
+                  onClick={() => {
+                    const isAr = lang !== 'en';
+                    const headers = isAr
+                      ? ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ إجراء 155','تاريخ الإغلاق المالي','رقم م.1','قيمة م.1','رقم م.2','قيمة م.2','القيمة التقديرية','غير مفوتر (تقريبي)']
+                      : ['Work Order','District','Region','Sector','Inv. Type','155 Close','Fin. Close','Inv.1 No.','Inv.1 Val.','Inv.2 No.','Inv.2 Val.','Est. Value','Approx. Unbilled'];
+                    const fmtNum = (v: any) => v != null ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+                    const fmtDate = (v: any) => v ? new Date(v).toLocaleDateString('en-CA') : '—';
+                    const rows = kpiDrawerRows.map((r: any) => [
+                      r.orderNumber ?? '—', r.district ?? '—', r.regionNameAr ?? '—', r.sectorNameAr ?? '—',
+                      r.invoiceType ?? '—', fmtDate(r.proc155CloseDate), fmtDate(r.financialCloseDate),
+                      r.invoiceNumber ?? '—', fmtNum(r.invoice1), r.invoice2Number ?? '—', fmtNum(r.invoice2),
+                      fmtNum(r.estimatedValue), fmtNum(r.approxValue),
+                    ]);
+                    const totalVal = fmtNum(kpiDrawerTotal);
+                    const tableRows = rows.map((row: string[], i: number) =>
+                      `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${row.map((cell: string, ci: number) => `<td style="text-align:${ci>=8?'left':'right'};direction:${ci>=8?'ltr':'rtl'}">${cell}</td>`).join('')}</tr>`
+                    ).join('');
+                    const colSpan = headers.length - 1;
+                    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                      <title>${isAr ? 'مغلقة لم تُفوتر' : 'Closed w/o Invoice'}</title>
+                      <style>
+                        body { font-family: Arial, sans-serif; font-size: 11px; direction: rtl; margin: 16px; }
+                        h2 { font-size: 14px; margin-bottom: 4px; }
+                        .sub { font-size: 11px; color: #666; margin-bottom: 12px; }
+                        table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
+                        tr { page-break-inside: avoid; }
+                        th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 10px; text-align: right; }
+                        td { border: 1px solid #e2e8f0; padding: 4px 8px; }
+                        tfoot td { font-weight: bold; background: #eef2ff; border-top: 2px solid #818cf8; }
+                        @page { size: landscape; margin: 12mm; }
+                      </style></head><body>
+                      <h2>${isAr ? 'مغلقة لم تُفوتر — التفاصيل' : 'Closed w/o Invoice — Detail'}</h2>
+                      <div class="sub">${kpiDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س':'SAR'}</div>
+                      <table>
+                        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+                        <tbody>${tableRows}</tbody>
+                        <tfoot><tr><td colspan="${colSpan}" style="text-align:right">${isAr?'الإجمالي':'Total'}</td><td style="text-align:left;direction:ltr">${totalVal}</td></tr></tfoot>
+                      </table>
+                      </body></html>`;
+                    const pw = window.open('', '_blank', 'width=1100,height=700');
+                    if (pw) { pw.document.write(html); pw.document.close(); pw.focus(); pw.print(); }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Print' : 'طباعة'}
+                </button>
+                {/* Close */}
+                <button
+                  onClick={() => setKpiDrawerOpen(false)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-auto p-4" id="kpi-drawer-print-area">
+              {kpiDrawerLoading ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  {lang === 'en' ? 'Loading...' : 'جارٍ التحميل...'}
+                </div>
+              ) : kpiDrawerRows.length === 0 ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
+                  {lang === 'en' ? 'No records found.' : 'لا توجد سجلات.'}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  {/* Print title (hidden on screen) */}
+                  <div className="hidden print:block mb-4 text-center font-bold text-base">
+                    {lang === 'en' ? 'Closed w/o Invoice — Detail' : 'مغلقة لم تُفوتر — التفاصيل'}
+                    <div className="text-xs font-normal text-slate-500 mt-1">
+                      {kpiDrawerRows.length} {lang === 'en' ? 'orders' : 'أمر'} · ~{kpiDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} {lang === 'en' ? 'SAR' : 'ر.س'}
+                    </div>
+                  </div>
+                  <table className="w-full text-xs border-collapse min-w-[800px]">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        {[
+                          lang === 'en' ? 'Work Order' : 'أمر العمل',
+                          lang === 'en' ? 'District' : 'الحي',
+                          lang === 'en' ? 'Region' : 'المنطقة',
+                          lang === 'en' ? 'Sector' : 'القطاع',
+                          lang === 'en' ? 'Inv. Type' : 'نوع المستخلص',
+                          lang === 'en' ? '155 Close' : 'إجراء 155',
+                          lang === 'en' ? 'Fin. Close' : 'إغلاق مالي',
+                          lang === 'en' ? 'Inv.1 No.' : 'رقم م.1',
+                          lang === 'en' ? 'Inv.1 Val.' : 'قيمة م.1',
+                          lang === 'en' ? 'Inv.2 No.' : 'رقم م.2',
+                          lang === 'en' ? 'Inv.2 Val.' : 'قيمة م.2',
+                          lang === 'en' ? 'Est. Value' : 'القيمة التقديرية',
+                          lang === 'en' ? 'Approx. Unbilled' : 'غير مفوتر (تقريبي)',
+                        ].map(h => (
+                          <th key={h} className="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {kpiDrawerRows.map((row, i) => (
+                        <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                          <td className="px-3 py-2 font-medium text-indigo-700 whitespace-nowrap">{row.orderNumber ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.district ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.regionNameAr ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.sectorNameAr ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceType ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                            {row.proc155CloseDate ? new Date(row.proc155CloseDate).toLocaleDateString('en-CA') : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                            {row.financialCloseDate ? new Date(row.financialCloseDate).toLocaleDateString('en-CA') : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceNumber ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
+                            {row.invoice1 != null ? row.invoice1.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoice2Number ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
+                            {row.invoice2 != null ? row.invoice2.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
+                            {row.estimatedValue != null ? row.estimatedValue.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-orange-600 whitespace-nowrap text-left" dir="ltr">
+                            {row.approxValue != null ? row.approxValue.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
+                        <td colSpan={12} className="px-3 py-2 text-right text-slate-600">
+                          {lang === 'en' ? 'Total Approx. Unbilled' : 'إجمالي غير المفوتر (تقريبي)'}
+                        </td>
+                        <td className="px-3 py-2 text-indigo-600 text-left" dir="ltr">
+                          {kpiDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── مفوتر ولم يصدر له شهادة إنجاز — Drill-down Drawer ──────────── */}
+      {certDrawerOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setCertDrawerOpen(false)} />
+          <div className="fixed top-0 right-0 h-full w-full max-w-5xl bg-white shadow-2xl z-50 flex flex-col" dir="rtl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-indigo-50/60 print:hidden">
+              <div className="flex items-center gap-2">
+                <BadgeAlert className="w-5 h-5 text-indigo-500" />
+                <span className="font-semibold text-slate-800 text-sm">
+                  {lang === 'en' ? 'Invoiced — No Cert' : 'مفوتر ولم يصدر له شهادة إنجاز'}
+                </span>
+                {!certDrawerLoading && (
+                  <span className="text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">
+                    {certDrawerRows.length} {lang === 'en' ? 'orders' : 'أمر'}
+                    {certDrawerTotal > 0 && (
+                      <span className="mr-1">· ~{certDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} {lang === 'en' ? 'SAR' : 'ر.س'}</span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Excel */}
+                <button
+                  onClick={async () => {
+                    try {
+                      const ExcelJS = (await import('exceljs')).default;
+                      const wb = new ExcelJS.Workbook();
+                      const ws = wb.addWorksheet(lang === 'en' ? 'Invoiced No Cert' : 'مفوتر بلا شهادة');
+                      ws.views = [{ rightToLeft: lang !== 'en' }];
+                      const headers = lang === 'en'
+                        ? ['Work Order','District','Region','Sector','Inv. Type','155 Date','Inv.1 No.','Inv.1 Value','Billing Date','Inv.2 (Est.)','Total (Est.)']
+                        : ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ 155','رقم م.1','قيمة م.1','تاريخ فوترة م.1','م.2 (تقديري)','الإجمالي (تقديري)'];
+                      ws.addRow(headers).font = { bold: true };
+                      certDrawerRows.forEach((r: any) => {
+                        ws.addRow([
+                          r.orderNumber, r.district, r.regionNameAr, r.sectorNameAr, r.invoiceType,
+                          r.proc155CloseDate ? new Date(r.proc155CloseDate).toLocaleDateString('en-CA') : '',
+                          r.invoiceNumber, r.invoice1,
+                          r.invoiceBillingDate ? new Date(r.invoiceBillingDate).toLocaleDateString('en-CA') : '',
+                          r.approxInvoice2, (r.invoice1 ?? 0) * 2,
+                        ]);
+                      });
+                      ws.columns.forEach(col => { col.width = 18; });
+                      const buf = await wb.xlsx.writeBuffer();
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+                      a.download = `invoiced-no-cert-${new Date().toISOString().slice(0,10)}.xlsx`;
+                      a.click();
+                    } catch(e) { console.error(e); }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />{lang === 'en' ? 'Excel' : 'Excel'}
+                </button>
+                {/* Print */}
+                <button
+                  onClick={() => {
+                    const isAr = lang !== 'en';
+                    const headers = isAr
+                      ? ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ 155','رقم م.1','قيمة م.1','تاريخ فوترة م.1','م.2 (تقديري)','الإجمالي (تقديري)']
+                      : ['Work Order','District','Region','Sector','Inv. Type','155 Date','Inv.1 No.','Inv.1 Val.','Billing','Inv.2 (Est.)','Total (Est.)'];
+                    const fmtNum  = (v: any) => v != null ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+                    const fmtDate = (v: any) => v ? new Date(v).toLocaleDateString('en-CA') : '—';
+                    const rows = certDrawerRows.map((r: any) => [
+                      r.orderNumber ?? '—', r.district ?? '—', r.regionNameAr ?? '—', r.sectorNameAr ?? '—',
+                      r.invoiceType ?? '—', fmtDate(r.proc155CloseDate),
+                      r.invoiceNumber ?? '—', fmtNum(r.invoice1), fmtDate(r.invoiceBillingDate),
+                      fmtNum(r.approxInvoice2), fmtNum((r.invoice1 ?? 0) * 2),
+                    ]);
+                    const totalVal = fmtNum(certDrawerTotal);
+                    const tableRows = rows.map((row: string[], i: number) =>
+                      `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${row.map((cell: string, ci: number) => `<td style="text-align:${ci>=7?'left':'right'};direction:${ci>=7?'ltr':'rtl'}">${cell}</td>`).join('')}</tr>`
+                    ).join('');
+                    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                      <title>${isAr ? 'مفوتر ولم يصدر له شهادة إنجاز' : 'Invoiced No Cert'}</title>
+                      <style>
+                        body{font-family:Arial,sans-serif;font-size:11px;direction:rtl;margin:16px}
+                        h2{font-size:14px;margin-bottom:4px}.sub{font-size:11px;color:#666;margin-bottom:12px}
+                        table{width:100%;border-collapse:collapse;page-break-inside:auto}tr{page-break-inside:avoid}
+                        th{background:#eef2ff;border:1px solid #818cf8;padding:5px 8px;font-size:10px;text-align:right}
+                        td{border:1px solid #e2e8f0;padding:4px 8px}
+                        tfoot td{font-weight:bold;background:#eef2ff;border-top:2px solid #818cf8}
+                        @page{size:landscape;margin:12mm}
+                      </style></head><body>
+                      <h2>${isAr ? 'مفوتر ولم يصدر له شهادة إنجاز — التفاصيل' : 'Invoiced No Cert — Detail'}</h2>
+                      <div class="sub">${certDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س (م.2 تقديري)':'SAR (est. inv.2)'}</div>
+                      <table>
+                        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+                        <tbody>${tableRows}</tbody>
+                        <tfoot><tr><td colspan="${headers.length-1}" style="text-align:right">${isAr?'إجمالي م.2 المتبقي (تقديري)':'Total est. inv.2'}</td><td style="text-align:left;direction:ltr">${totalVal}</td></tr></tfoot>
+                      </table></body></html>`;
+                    const pw = window.open('', '_blank', 'width=1100,height=700');
+                    if (pw) { pw.document.write(html); pw.document.close(); pw.focus(); pw.print(); }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />{lang === 'en' ? 'Print' : 'طباعة'}
+                </button>
+                <button onClick={() => setCertDrawerOpen(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            {/* Body */}
+            <div className="flex-1 overflow-auto p-4">
+              {certDrawerLoading ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />{lang === 'en' ? 'Loading...' : 'جارٍ التحميل...'}
+                </div>
+              ) : certDrawerRows.length === 0 ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
+                  {lang === 'en' ? 'No records found.' : 'لا توجد سجلات.'}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse min-w-[900px]">
+                    <thead>
+                      <tr className="bg-indigo-50 border-b border-indigo-200">
+                        {[
+                          lang === 'en' ? 'Work Order'   : 'أمر العمل',
+                          lang === 'en' ? 'District'     : 'الحي',
+                          lang === 'en' ? 'Region'       : 'المنطقة',
+                          lang === 'en' ? 'Sector'       : 'القطاع',
+                          lang === 'en' ? 'Inv. Type'    : 'نوع المستخلص',
+                          lang === 'en' ? '155 Date'     : 'تاريخ 155',
+                          lang === 'en' ? 'Inv.1 No.'    : 'رقم م.1',
+                          lang === 'en' ? 'Inv.1 Val.'   : 'قيمة م.1',
+                          lang === 'en' ? 'Billing'      : 'تاريخ فوترة م.1',
+                          lang === 'en' ? 'Inv.2 (Est.)' : 'م.2 (تقديري)',
+                          lang === 'en' ? 'Total (Est.)' : 'الإجمالي (تقديري)',
+                        ].map(h => (
+                          <th key={h} className="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-indigo-200">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {certDrawerRows.map((row: any, i: number) => (
+                        <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                          <td className="px-3 py-2 font-medium text-indigo-700 whitespace-nowrap">{row.orderNumber ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.district ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.regionNameAr ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.sectorNameAr ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceType ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                            {row.proc155CloseDate ? new Date(row.proc155CloseDate).toLocaleDateString('en-CA') : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceNumber ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
+                            {row.invoice1 != null ? row.invoice1.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                            {row.invoiceBillingDate ? new Date(row.invoiceBillingDate).toLocaleDateString('en-CA') : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-indigo-600 whitespace-nowrap text-left font-medium" dir="ltr">
+                            {row.approxInvoice2 != null ? row.approxInvoice2.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-indigo-700 whitespace-nowrap text-left font-semibold" dir="ltr">
+                            {row.invoice1 != null ? (row.invoice1 * 2).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
+                        <td colSpan={9} className="px-3 py-2 text-right text-slate-600">
+                          {lang === 'en' ? 'Total est. inv.2 (unbilled)' : 'إجمالي م.2 المتبقي (تقديري)'}
+                        </td>
+                        <td className="px-3 py-2 text-indigo-600 text-left" dir="ltr">
+                          {certDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </td>
+                        <td className="px-3 py-2 text-indigo-700 text-left" dir="ltr">
+                          {(certDrawerTotal * 2).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── شهادات الإنجاز المكتملة — Drill-down Drawer ──────────────── */}
+      {compCertDrawerOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setCompCertDrawerOpen(false)} />
+          <div className="fixed top-0 right-0 h-full w-full max-w-5xl bg-white shadow-2xl z-50 flex flex-col" dir="rtl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <BadgeCheck className="w-5 h-5 text-indigo-500" />
+                <span className="font-semibold text-slate-800 text-sm">
+                  {lang === 'en' ? 'Completed w/ Cert' : 'شهادات الإنجاز المكتملة'}
+                </span>
+                {!compCertDrawerLoading && (
+                  <span className="text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">
+                    {compCertDrawerRows.length} {lang === 'en' ? 'orders' : 'أمر'}
+                    {compCertDrawerTotal > 0 && (
+                      <span className="mr-1">· ~{compCertDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} {lang === 'en' ? 'SAR' : 'ر.س'}</span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Column picker button */}
+                <button
+                  onClick={() => setCompCertPickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 text-xs font-medium hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Columns' : 'الأعمدة'}
+                </button>
+                {/* Excel export */}
+                <button
+                  onClick={async () => {
+                    const ExcelJS = (await import('exceljs')).default;
+                    const wb = new ExcelJS.Workbook();
+                    const ws = wb.addWorksheet(lang === 'en' ? 'Completed Cert' : 'شهادات مكتملة');
+                    const headers = compCertVisibleCols.map(c => lang === 'en' ? c.labelEn : c.labelAr);
+                    ws.addRow(headers).font = { bold: true };
+                    compCertDrawerRows.forEach((r: any) => {
+                      ws.addRow(compCertVisibleCols.map(c => {
+                        const v = ccGetVal(r, c.key);
+                        if (ccIsDate(c)) return ccFmtDate(v);
+                        if (ccIsNum(c))  return v != null && v !== '' ? Number(v) : '';
+                        return v ?? '';
+                      }));
+                    });
+                    ws.addRow([]);
+                    const totalColIdx = compCertVisibleCols.findIndex(c => c.key === 'totalInvoiced');
+                    if (totalColIdx >= 0) {
+                      const totRow = ws.addRow(compCertVisibleCols.map((c, i) =>
+                        i === totalColIdx ? compCertDrawerTotal : (i === totalColIdx - 1 ? (lang === 'en' ? 'Total' : 'الإجمالي') : '')
+                      ));
+                      totRow.font = { bold: true };
+                    }
+                    const buf = await wb.xlsx.writeBuffer();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+                    a.download = `completed-cert-${Date.now()}.xlsx`;
+                    a.click();
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Excel' : 'Excel'}
+                </button>
+                {/* PDF export */}
+                <button
+                  onClick={() => {
+                    const isAr = lang !== 'en';
+                    const headers = compCertVisibleCols.map(c => isAr ? c.labelAr : c.labelEn);
+                    const totalVal = ccFmtNum(compCertDrawerTotal);
+                    const tableRows = compCertDrawerRows.map((r: any, i: number) => {
+                      const cells = compCertVisibleCols.map(c => {
+                        const v = ccGetVal(r, c.key);
+                        const isN = ccIsNum(c); const isD = ccIsDate(c);
+                        return `<td style="text-align:${isN?'left':'right'};direction:${isN||isD?'ltr':'rtl'}">${ccFmtCell(v, c)}</td>`;
+                      }).join('');
+                      return `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${cells}</tr>`;
+                    }).join('');
+                    const totalColIdx = compCertVisibleCols.findIndex(c => c.key === 'totalInvoiced');
+                    const footerRow = totalColIdx >= 0
+                      ? `<tfoot><tr>${compCertVisibleCols.map((_, i) => i < totalColIdx ? '<td></td>' : i === totalColIdx - 1 ? `<td style="text-align:right">${isAr?'الإجمالي':'Total'}</td>` : `<td style="text-align:left;direction:ltr">${totalVal}</td>`).join('')}</tr></tfoot>`
+                      : '';
+                    const w = window.open('', '_blank');
+                    if (!w) return;
+                    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                      <title>${isAr ? 'شهادات الإنجاز المكتملة' : 'Completed w/ Cert'}</title>
+                      <style>
+                        body{font-family:Arial,sans-serif;font-size:11px;direction:rtl}
+                        h2{font-size:14px;margin-bottom:4px} .sub{color:#666;margin-bottom:12px;font-size:11px}
+                        table{border-collapse:collapse;width:100%}
+                        th,td{border:1px solid #ddd;padding:4px 7px;white-space:nowrap}
+                        th{background:#4f46e5;color:#fff;font-weight:bold}
+                        tfoot td{font-weight:bold;background:#eef2ff}
+                        @page{size:landscape;margin:12mm}
+                      </style></head><body>
+                      <h2>${isAr ? 'شهادات الإنجاز المكتملة — التفاصيل' : 'Completed w/ Cert — Detail'}</h2>
+                      <div class="sub">${compCertDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س':'SAR'}</div>
+                      <table>
+                        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+                        <tbody>${tableRows}</tbody>
+                        ${footerRow}
+                      </table></body></html>`);
+                    w.document.close();
+                    w.print();
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-xs font-medium hover:bg-rose-100 transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'PDF' : 'PDF'}
+                </button>
+                <button onClick={() => setCompCertDrawerOpen(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            {/* Body */}
+            <div className="flex-1 overflow-auto p-4">
+              {compCertDrawerLoading ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />{lang === 'en' ? 'Loading...' : 'جارٍ التحميل...'}
+                </div>
+              ) : compCertDrawerRows.length === 0 ? (
+                <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
+                  {lang === 'en' ? 'No records found.' : 'لا توجد سجلات.'}
+                </div>
+              ) : (() => {
+                  type VCol = { key: string; labelAr: string; labelEn: string; dataType?: string };
+                  const totalColVisible = compCertColKeys.includes('totalInvoiced');
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-indigo-50 text-indigo-800">
+                            {compCertVisibleCols.map((col: VCol) => (
+                              <th
+                                key={col.key}
+                                className={`px-3 py-2 font-semibold border-b border-indigo-200 whitespace-nowrap ${ccIsNum(col) ? 'text-left' : 'text-right'}`}
+                              >
+                                {lang === 'en' ? col.labelEn : col.labelAr}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {compCertDrawerRows.map((row: any, i: number) => (
+                            <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                              {compCertVisibleCols.map((col: VCol) => {
+                                const v = ccGetVal(row, col.key);
+                                const isNum   = ccIsNum(col);
+                                const isDate  = ccIsDate(col);
+                                const isTotal = col.key === 'totalInvoiced';
+                                const isOrder = col.key === 'orderNumber';
+                                return (
+                                  <td
+                                    key={col.key}
+                                    className={`px-3 py-2 whitespace-nowrap ${isOrder ? 'font-medium text-indigo-700' : isTotal ? 'font-semibold text-indigo-600 text-left' : isNum ? 'text-slate-700 text-left' : 'text-slate-600'}`}
+                                    dir={isNum || isDate ? 'ltr' : undefined}
+                                  >
+                                    {ccFmtCell(v, col)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                        {totalColVisible && (
+                          <tfoot>
+                            <tr className="bg-indigo-50 font-semibold border-t-2 border-indigo-200">
+                              <td colSpan={compCertVisibleCols.length - 1} className="px-3 py-2 text-right text-slate-600">
+                                {lang === 'en' ? 'Total invoiced' : 'إجمالي المفوتر'}
+                              </td>
+                              <td className="px-3 py-2 text-indigo-700 text-left" dir="ltr">
+                                {compCertDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  );
+                })()}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Column Picker Modal (شهادات الإنجاز المكتملة) ──────────────────── */}
+      {compCertPickerOpen && (
+        <ColumnPickerModal
+          tableKey="COMP_CERT"
+          availableCols={compCertAvailableCols}
+          selectedKeys={compCertColKeys}
+          onSave={keys => setCompCertColKeys(keys)}
+          onClose={() => setCompCertPickerOpen(false)}
+          maxCols={COMP_CERT_MAX_COLS}
+        />
+      )}
+
+      {/* ── Status Drawer ────────────────────────────────────────────────────── */}
+      <KpiDrawer
+        open={!!statusDrawer}
+        onClose={() => setStatusDrawer(null)}
+        title={
+          statusDrawer?.status === 'OVERDUE'   ? 'أوامر العمل المتأخرة' :
+          statusDrawer?.status === 'WARNING'   ? 'أوامر العمل في حالة تنبيه' :
+          statusDrawer?.status === 'ON_TIME'   ? 'أوامر العمل المنتظمة' :
+          statusDrawer?.status === 'COMPLETED' ? 'أوامر العمل المنجزة' :
+          'جميع أوامر العمل'
+        }
+        titleEn={
+          statusDrawer?.status === 'OVERDUE'   ? 'Overdue Orders' :
+          statusDrawer?.status === 'WARNING'   ? 'Warning Orders' :
+          statusDrawer?.status === 'ON_TIME'   ? 'On-Time Orders' :
+          statusDrawer?.status === 'COMPLETED' ? 'Completed Orders' :
+          'All Orders'
+        }
+        icon={
+          statusDrawer?.status === 'OVERDUE'  ? AlertTriangle :
+          statusDrawer?.status === 'WARNING'  ? Clock :
+          statusDrawer?.status === 'COMPLETED'? CheckCircle2 :
+          BarChart2
+        }
+        iconColorCls={
+          statusDrawer?.status === 'OVERDUE'  ? 'text-red-500' :
+          statusDrawer?.status === 'WARNING'  ? 'text-amber-500' :
+          statusDrawer?.status === 'COMPLETED'? 'text-emerald-500' :
+          'text-indigo-500'
+        }
+        rows={statusDrawer?.rows ?? []}
+        loading={statusDrawer?.loading ?? false}
+        availableCols={statusDrawerAvailCols}
+        colKeys={statusDrawerColKeys}
+        onColKeysChange={setStatusDrawerColKeys}
+        lang={lang}
+      />
+
+      {/* ── Metric Drawer ────────────────────────────────────────────────────── */}
+      <KpiDrawer
+        open={!!metricDrawer}
+        onClose={() => setMetricDrawer(null)}
+        title={metricDrawer ? `تفاصيل: ${metricDrawer.nameAr}` : ''}
+        titleEn={metricDrawer ? `Detail: ${metricDrawer.nameEn ?? metricDrawer.nameAr}` : ''}
+        icon={TrendingUp}
+        iconColorCls="text-violet-500"
+        rows={metricDrawer?.rows ?? []}
+        loading={metricDrawer?.loading ?? false}
+        availableCols={metricDrawerAvailCols}
+        colKeys={metricDrawerColKeys}
+        onColKeysChange={setMetricDrawerColKeys}
+        lang={lang}
+      />
+
+      {/* ── Billing Drawer ───────────────────────────────────────────────────── */}
+      <KpiDrawer
+        open={!!billingDrawer}
+        onClose={() => setBillingDrawer(null)}
+        title={billingDrawer?.type === 'partialBilled' ? 'أوامر مفوترة جزئياً' : 'أوامر غير مُحصَّلة بالكامل'}
+        titleEn={billingDrawer?.type === 'partialBilled' ? 'Partially Billed Orders' : 'Not Fully Collected Orders'}
+        icon={billingDrawer?.type === 'partialBilled' ? FileText : BadgeAlert}
+        iconColorCls={billingDrawer?.type === 'partialBilled' ? 'text-indigo-500' : 'text-amber-500'}
+        rows={billingDrawer?.rows ?? []}
+        loading={billingDrawer?.loading ?? false}
+        availableCols={billingDrawerAvailCols}
+        colKeys={billingDrawerColKeys}
+        onColKeysChange={setBillingDrawerColKeys}
+        lang={lang}
+      />
 
     </div>
     </MetricCfgCtx.Provider>

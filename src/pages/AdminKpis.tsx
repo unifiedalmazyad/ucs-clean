@@ -637,7 +637,7 @@ function PeriodicMetricsAdmin() {
                   {numericColumns.map((c: any) => <option key={c.columnKey} value={c.columnKey}>{lang === 'en' && c.labelEn ? c.labelEn : c.labelAr}</option>)}
                   <option value="length">{lang === 'en' ? 'Length (m)' : 'الطول (م)'}</option>
                   <option value="estimated_value">{lang === 'en' ? 'Estimated Value' : 'القيمة التقديرية'}</option>
-                  <option value="actual_invoice_value">{lang === 'en' ? 'Actual Value' : 'القيمة الفعلية'}</option>
+                  <option value="actual_invoice_value">{lang === 'en' ? 'Actual Value (Historical)' : 'القيمة الفعلية (تاريخي)'}</option>
                   <option value="collected_amount">{lang === 'en' ? 'Collected' : 'المحصّل'}</option>
                   <option value="remaining_amount">{lang === 'en' ? 'Remaining' : 'المتبقى'}</option>
                 </select></div>
@@ -792,7 +792,7 @@ function PeriodicMetricsAdmin() {
                         {numericColumns.map((c: any) => <option key={c.columnKey} value={c.columnKey}>{lang === 'en' && c.labelEn ? c.labelEn : c.labelAr}</option>)}
                         <option value="length">{lang === 'en' ? 'Length (m)' : 'الطول (م)'}</option>
                         <option value="estimated_value">{lang === 'en' ? 'Estimated Value' : 'القيمة التقديرية'}</option>
-                        <option value="actual_invoice_value">{lang === 'en' ? 'Actual Value' : 'القيمة الفعلية'}</option>
+                        <option value="actual_invoice_value">{lang === 'en' ? 'Actual Value (Historical)' : 'القيمة الفعلية (تاريخي)'}</option>
                         <option value="collected_amount">{lang === 'en' ? 'Collected' : 'المحصّل'}</option>
                         <option value="remaining_amount">{lang === 'en' ? 'Remaining' : 'المتبقى'}</option>
                       </select></div>

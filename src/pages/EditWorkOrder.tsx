@@ -1826,13 +1826,13 @@ export default function EditWorkOrder() {
     const invTypeOptions = ['نهائي', 'جزئي'];
     const canInvType  = canWriteField('invoice_type');
     const canEst      = canWriteField('estimated_value');
-    const canActual   = canWriteField('actual_invoice_value');
     const canInvNum   = canWriteField('invoice_number');
     const canInv1     = canWriteField('invoice_1');
     const canBillDate = canWriteField('invoice_billing_date');
-    const canInv2Num  = canWriteField('invoice_2_number');
-    const canInv2     = canWriteField('invoice_2');
-    const canFinClose = canWriteField('financial_close_date');
+    const canInv2Num      = canWriteField('invoice_2_number');
+    const canInv2         = canWriteField('invoice_2');
+    const canInv2BillDate = canWriteField('invoice_2_billing_date');
+    const canFinClose     = canWriteField('financial_close_date');
     const canNotes    = canWriteField('financial_close_notes');
 
     /* ── الصف العلوي الثابت (يظهر دائماً) ── */
@@ -1856,17 +1856,6 @@ export default function EditWorkOrder() {
             {invTypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
         </div>
-        {invType && (
-          <div>
-            <label className={lbl}>
-              القيمة الفعلية للفاتورة
-              <span className="text-[10px] font-bold bg-slate-100 text-slate-500 rounded px-1">ر.س</span>
-            </label>
-            <input type="number" value={rs('actualInvoiceValue','actual_invoice_value')} disabled={!canActual}
-              onChange={e => handleChange('actualInvoiceValue', e.target.value === '' ? null : Number(e.target.value))}
-              className={inpD(!canActual)} />
-          </div>
-        )}
       </div>
     );
 
@@ -1876,19 +1865,18 @@ export default function EditWorkOrder() {
     }
 
     /* ── حسابات مشتركة ── */
-    const inv1      = rn('invoice1', 'invoice_1');
-    const inv2      = rn('invoice2', 'invoice_2');
-    const actual    = rn('actualInvoiceValue', 'actual_invoice_value');
-    const estimated = rn('estimatedValue', 'estimated_value');
+    const inv1         = rn('invoice1', 'invoice_1');
+    const inv2         = rn('invoice2', 'invoice_2');
+    const estimated    = rn('estimatedValue', 'estimated_value');
+    const totalInvoiced = inv1 + inv2;
+    const difference    = totalInvoiced - estimated;
 
-    // المعادلة الصحيحة: المتبقي = القيمة الفعلية للفاتورة − قيمة المستخلص (لكلا النوعين)
-    const [collected, remaining] = invType === 'جزئي'
-      ? [inv1 + inv2,  actual - (inv1 + inv2)]
-      : [inv1,         actual - inv1];
-
-    const remCls = remaining <= 0
+    const diffCls = difference > 0
       ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-      : 'bg-amber-50 border-amber-200 text-amber-700';
+      : difference < 0
+        ? 'bg-red-50 border-red-200 text-red-700'
+        : 'bg-blue-50 border-blue-200 text-blue-700';
+    const diffLabel = difference > 0 ? 'أعلى من التقديري' : difference < 0 ? 'أقل من التقديري' : 'مطابق';
 
     const divider = (txt: string) => (
       <div className="col-span-2 flex items-center gap-2 py-1">
@@ -1898,7 +1886,7 @@ export default function EditWorkOrder() {
       </div>
     );
 
-    const moneyRO = (v: number, lbTxt: string, cls: string) => (
+    const moneyRO = (v: number, lbTxt: string, cls: string, subLabel?: string) => (
       <div>
         <label className={lbl}>
           {lbTxt}
@@ -1906,7 +1894,7 @@ export default function EditWorkOrder() {
         </label>
         <div className={`w-full px-4 py-2 border rounded-lg text-sm font-semibold flex items-center justify-between ${cls}`}>
           <span>{fmtNum(v)}</span>
-          <span className="text-xs opacity-60">ر.س</span>
+          <span className="text-xs opacity-70">{subLabel ?? 'ر.س'}</span>
         </div>
       </div>
     );
@@ -1968,18 +1956,24 @@ export default function EditWorkOrder() {
             </div>
             <div>
               <label className={lbl}>تاريخ الفوترة 2</label>
-              <input type="date" value={rd('financialCloseDate','financial_close_date')} disabled={!canFinClose}
-                onChange={e => handleChange('financialCloseDate', e.target.value || null)}
-                className={inpD(!canFinClose)} />
+              <input type="date" value={rd('invoice2BillingDate','invoice_2_billing_date')} disabled={!canInv2BillDate}
+                onChange={e => handleChange('invoice2BillingDate', e.target.value || null)}
+                className={inpD(!canInv2BillDate)} />
             </div>
             <div />
 
             {divider('الإجماليات')}
 
-            {moneyRO(collected, 'القيمة المحصلة', 'bg-indigo-50 border-indigo-200 text-indigo-700')}
-            {moneyRO(remaining, 'المتبقي', remCls)}
+            {moneyRO(totalInvoiced, 'إجمالي المفوتر', 'bg-indigo-50 border-indigo-200 text-indigo-700')}
+            {moneyRO(difference, 'الفرق عن التقديري', diffCls, diffLabel)}
 
-            <div className="col-span-2">
+            <div>
+              <label className={lbl}>تاريخ الإغلاق المالي</label>
+              <input type="date" value={rd('financialCloseDate','financial_close_date')} disabled={!canFinClose}
+                onChange={e => handleChange('financialCloseDate', e.target.value || null)}
+                className={inpD(!canFinClose)} />
+            </div>
+            <div>
               <label className={lbl}>ملاحظات الإجراء المالي</label>
               <input type="text" value={rs('financialNotes','financial_close_notes')} disabled={!canNotes}
                 onChange={e => handleChange('financialNotes', e.target.value)}
@@ -2021,8 +2015,8 @@ export default function EditWorkOrder() {
           </div>
           <div />
 
-          {moneyRO(collected, 'القيمة المحصلة', 'bg-indigo-50 border-indigo-200 text-indigo-700')}
-          {moneyRO(remaining, 'المتبقي', remCls)}
+          {moneyRO(totalInvoiced, 'إجمالي المفوتر', 'bg-indigo-50 border-indigo-200 text-indigo-700')}
+          {moneyRO(difference, 'الفرق عن التقديري', diffCls, diffLabel)}
 
           <div>
             <label className={lbl}>تاريخ الإغلاق المالي</label>

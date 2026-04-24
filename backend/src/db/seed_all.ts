@@ -490,10 +490,9 @@ async function main() {
     { columnKey: 'procedure', value: 'حفر يدوي',   labelAr: 'حفر يدوي',   sortOrder: 2 },
     { columnKey: 'procedure', value: 'دفع أنابيب', labelAr: 'دفع أنابيب', sortOrder: 3 },
     { columnKey: 'procedure', value: 'معلق',       labelAr: 'معلق',       sortOrder: 4 },
-    // invoice_type
-    { columnKey: 'invoice_type', value: 'جزئي',     labelAr: 'جزئي',     sortOrder: 1 },
-    { columnKey: 'invoice_type', value: 'نهائي',    labelAr: 'نهائي',    sortOrder: 2 },
-    { columnKey: 'invoice_type', value: 'مرحلي',    labelAr: 'مرحلي',    sortOrder: 3 },
+    // invoice_type — only two canonical values are valid
+    { columnKey: 'invoice_type', value: 'جزئي',  labelAr: 'جزئي',  sortOrder: 1 },
+    { columnKey: 'invoice_type', value: 'نهائي', labelAr: 'نهائي', sortOrder: 2 },
   ];
 
   for (const opt of OPTIONS) {

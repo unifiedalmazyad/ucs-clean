@@ -94,7 +94,7 @@ export default function Dashboard() {
         <div className="bg-white p-6 rounded-2xl border border-slate-200" style={{ boxShadow: 'var(--shadow-card)' }}>
           <h3 className="font-bold text-slate-800 mb-4">{t('dashboard.status_dist')}</h3>
           <div className="space-y-4">
-            {Object.entries(stats.byStatus).map(([status, count]: any) => (
+            {Object.entries(stats.byStatus).filter(([status]) => status !== 'CANCELLED').map(([status, count]: any) => (
               <div key={status} className="flex items-center justify-between gap-4">
                 <span className="text-slate-600 text-sm whitespace-nowrap">
                   {lang === 'en' 

@@ -147,6 +147,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       invoiced: 0,
       collected: 0,
       remaining: 0,
+      expectedRemaining: 0,
+      completedEstimated: 0,
+      completedInvoiced: 0,
     };
 
     const assignmentTrendMap: Record<string, { name: string; value: number }> = {};
@@ -181,12 +184,37 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       const assignmentDate = orderAny.assignmentDate ? new Date(orderAny.assignmentDate) : null;
       
       // Financial
-      financial.estimated += Number(orderAny.estimatedValue || 0);
-      const inv = Number(orderAny.actualInvoiceValue || 0);
-      const col = Number(orderAny.collectedAmount || 0);
-      financial.invoiced  += inv;
+      const est  = Number(orderAny.estimatedValue || 0);
+      const inv1 = Number(orderAny.invoice1 ?? orderAny.invoice_1 ?? 0) || 0;
+      const inv2 = Number(orderAny.invoice2 ?? orderAny.invoice_2 ?? 0) || 0;
+      const col  = Number(orderAny.collectedAmount || 0);
+      const invType = orderAny.invoiceType ?? orderAny.invoice_type ?? null;
+
+      financial.estimated += est;
+      financial.invoiced  += col;
       financial.collected += col;
-      financial.remaining += Math.max(0, inv - col);
+      financial.remaining += Math.max(0, est - col);
+
+      // المتبقي المتوقع
+      if (invType === 'نهائي') {
+        financial.expectedRemaining += inv1 > 0 ? inv1 : est;
+      } else if (invType === 'جزئي') {
+        if (inv1 === 0) {
+          financial.expectedRemaining += est;
+        } else if (inv2 === 0) {
+          financial.expectedRemaining += inv1; // proxy: assume inv2 ≈ inv1
+        }
+        // both invoices exist → +0 (fully invoiced)
+      }
+
+      // الفرق للمفوتر المكتمل (only fully-invoiced orders)
+      const isFullyInvoiced =
+        (invType === 'نهائي' && inv1 > 0) ||
+        (invType === 'جزئي' && inv1 > 0 && inv2 > 0);
+      if (isFullyInvoiced) {
+        financial.completedEstimated += est;
+        financial.completedInvoiced  += inv1 + inv2;
+      }
 
       // TopDelays list (use assignment-date SLA for ranking only, not for counting)
       if (assignmentDate && !terminalStageIds.has(orderAny.stageId)) {
@@ -246,7 +274,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
           };
         }
         financialBySectorMap[sid].estimated += Number(orderAny.estimatedValue || 0);
-        financialBySectorMap[sid].invoiced  += Number(orderAny.actualInvoiceValue || 0);
+        financialBySectorMap[sid].invoiced  += Number(orderAny.collectedAmount || 0);
         financialBySectorMap[sid].collected += Number(orderAny.collectedAmount || 0);
         if (terminalStageIds.has(orderAny.stageId)) {
           financialBySectorMap[sid].completed++;
@@ -264,7 +292,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
           };
         }
         financialByRegionMap[rid].estimated += Number(orderAny.estimatedValue || 0);
-        financialByRegionMap[rid].invoiced  += Number(orderAny.actualInvoiceValue || 0);
+        financialByRegionMap[rid].invoiced  += Number(orderAny.collectedAmount || 0);
         financialByRegionMap[rid].collected += Number(orderAny.collectedAmount || 0);
       }
 
@@ -325,6 +353,12 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     const stageBottlenecks = Object.values(stageBottlenecksMap)
       .map(s => ({ nameAr: s.nameAr, nameEn: s.nameEn, value: s.count }));
 
+    // Derive الفرق للمفوتر المكتمل
+    (financial as any).completedDiffValue = financial.completedInvoiced - financial.completedEstimated;
+    (financial as any).completedDiffPct   = financial.completedEstimated > 0
+      ? ((financial.completedInvoiced - financial.completedEstimated) / financial.completedEstimated) * 100
+      : 0;
+
     const financialFunnel = [
       { name: 'Estimated', value: financial.estimated },
       { name: 'Invoiced', value: financial.invoiced },
@@ -371,7 +405,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         periodSectorFinMap[sid] = { estimated: 0, invoiced: 0, collected: 0, completed: 0, total: 0 };
       }
       periodSectorFinMap[sid].estimated += Number(o.estimatedValue || 0);
-      periodSectorFinMap[sid].invoiced  += Number(o.actualInvoiceValue || 0);
+      periodSectorFinMap[sid].invoiced  += Number(o.collectedAmount || 0);
       periodSectorFinMap[sid].collected += Number(o.collectedAmount || 0);
       periodSectorFinMap[sid].total++;
       if (terminalStageIds.has(o.stageId)) periodSectorFinMap[sid].completed++;

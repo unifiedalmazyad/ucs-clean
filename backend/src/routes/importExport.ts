@@ -71,7 +71,10 @@ function buildOptMap(allColOpts: any[], allSectors: any[], allRegions: any[], al
   map['sector_id'] = allSectors.map((s: any) => s.nameAr || s.name).filter(Boolean);
   map['region_id'] = allRegions.map((r: any) => r.nameAr || r.name).filter(Boolean);
   map['procedure']  = allStages.map((s: any) => s.nameAr).filter(Boolean);
+  // All boolean columns get نعم/لا dropdown
   map['completion_cert_confirm'] = ['نعم', 'لا'];
+  map['exec_delay_justified']    = ['نعم', 'لا'];
+  map['fin_delay_justified']     = ['نعم', 'لا'];
   return map;
 }
 
@@ -477,14 +480,24 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
           corePayload.orderNumber = orderNumber;
           corePayload.updatedAt   = new Date();
 
+          // ── Normalize invoice_type to canonical values only ────────────────
+          const INVOICE_TYPE_MAP: Record<string, string> = {
+            'مرحلي':      'جزئي',
+            'جزئي نهائي': 'جزئي',
+            'جزئي اولى':  'جزئي',
+          };
+          if (corePayload.invoiceType) {
+            corePayload.invoiceType = INVOICE_TYPE_MAP[corePayload.invoiceType] ?? corePayload.invoiceType;
+          }
+
           // ── Auto-compute financial fields ──────────────────────────────────
           if (corePayload.invoiceType) {
-            const inv1   = Number(corePayload.invoice1)           || 0;
-            const inv2   = Number(corePayload.invoice2)           || 0;
-            const actual = Number(corePayload.actualInvoiceValue) || 0;
-            const collected = corePayload.invoiceType === 'نهائي' ? inv1 : inv1 + inv2;
-            corePayload.collectedAmount = collected;
-            corePayload.remainingAmount = actual - collected;
+            const inv1 = Number(corePayload.invoice1)        || 0;
+            const inv2 = Number(corePayload.invoice2)        || 0;
+            const est  = Number(corePayload.estimatedValue)  || 0;
+            const totalInvoiced = inv1 + inv2;
+            corePayload.collectedAmount = totalInvoiced;
+            corePayload.remainingAmount = est - totalInvoiced;
           }
 
           let woId: string | null = null;
@@ -722,8 +735,9 @@ router.get('/export/users', authenticate, adminOnly, async (_req, res) => {
 router.get('/export/work_orders', authenticate, adminOnly, async (_req, res) => {
   try {
     const { allCatalog } = await getLookups();
-    // All catalog cols
-    const allWos: Record<string, any>[] = await db.select().from(workOrders).orderBy(asc(workOrders.createdAt)) as any;
+    // Use raw SQL (SELECT *) so physical columns added via ALTER TABLE (not in Drizzle schema) are included
+    const allWosResult = await pool.query('SELECT * FROM work_orders ORDER BY created_at ASC');
+    const allWos: Record<string, any>[] = allWosResult.rows;
     const allPerms: any[] = await db.select().from(excavationPermits).orderBy(asc(excavationPermits.createdAt)) as any;
 
     // Build latest-permit map: workOrderId → latest permit
@@ -748,7 +762,8 @@ router.get('/export/work_orders', authenticate, adminOnly, async (_req, res) => 
       const coreVals = woCols.map((c: any) => {
         const physKey = c.physicalKey || c.columnKey;
         const camel = toCamelKey(physKey);
-        let val = (wo as any)[camel] ?? (wo.customFields?.[physKey] ?? '');
+        // Check camelCase (Drizzle ORM result) then snake_case (raw SQL SELECT * result) then customFields fallback
+        let val = (wo as any)[camel] ?? (wo as any)[physKey] ?? (wo.customFields?.[physKey] ?? '');
         if (val instanceof Date) val = val.toISOString().slice(0, 10);
         return val ?? '';
       });

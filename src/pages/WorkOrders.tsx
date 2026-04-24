@@ -283,13 +283,11 @@ export default function WorkOrders() {
   const execOverdue       = DC.exec?.OVERDUE        ?? 0;
   const execCompleted     = DC.exec?.COMPLETED      ?? 0;
   const execCompletedLate = DC.exec?.COMPLETED_LATE ?? 0;
-  const execCancelled     = DC.exec?.CANCELLED      ?? 0;
   const finOk             = DC.fin?.OK              ?? 0;
   const finWarn           = DC.fin?.WARN            ?? 0;
   const finOverdue        = DC.fin?.OVERDUE         ?? 0;
   const finCompleted      = DC.fin?.COMPLETED       ?? 0;
   const finCompletedLate  = DC.fin?.COMPLETED_LATE  ?? 0;
-  const finCancelled      = DC.fin?.CANCELLED       ?? 0;
 
   const isCardsLoading = dashLoading;
 
@@ -302,14 +300,20 @@ export default function WorkOrders() {
       (CAT_ORDER[k.status] ?? 9) < (CAT_ORDER[w] ?? 9) ? k.status : w, 'INCOMPLETE');
   };
 
-  // عدد أوامر العمل المغلقة/الملغاة (لإظهار العداد)
+  // عدد أوامر العمل المغلقة (لإظهار العداد) — الملغية مخفية دائماً
   const totalClosedCount = allRows.filter((r: any) =>
-    r.overallStatus === 'CLOSED' || r.dashExec === 'CANCELLED'
+    r.overallStatus === 'CLOSED'
   ).length;
 
   const filteredRows = allRows.filter((row: any) => {
-    // إخفاء المغلق والملغي افتراضياً ما لم يُفعَّل خيار إظهارها أو فلتر كرت نشط
-    const isHidden = row.overallStatus === 'CLOSED' || row.dashExec === 'CANCELLED';
+    // الأوامر الملغية مخفية دائماً — إلا إذا كان البحث يطابق رقم الأمر تماماً
+    if (row.dashExec === 'CANCELLED') {
+      const orderNum = String(row.orderNumber ?? '').toLowerCase();
+      const q = search.trim().toLowerCase();
+      if (!q || !orderNum || orderNum !== q) return false;
+    }
+    // إخفاء المغلق افتراضياً ما لم يُفعَّل خيار إظهارها أو فلتر كرت نشط
+    const isHidden = row.overallStatus === 'CLOSED';
     if (isHidden && !showHidden && !filterCat) return false;
 
     if (filterStatus.length > 0 && !filterStatus.includes(row.worstStatus)) return false;
@@ -645,7 +649,6 @@ export default function WorkOrders() {
             OVERDUE:        { color: 'text-red-600',     bg: 'bg-white', ring: 'ring-red-400',     Icon: XCircle,       labelAr: 'متأخر',      labelEn: 'Overdue'   },
             COMPLETED:      { color: 'text-indigo-600',  bg: 'bg-white', ring: 'ring-indigo-400',  Icon: CheckCircle2,  labelAr: 'منجز',       labelEn: 'Done'      },
             COMPLETED_LATE: { color: 'text-slate-500',   bg: 'bg-white', ring: 'ring-slate-400',   Icon: CheckCircle2,  labelAr: 'منجز متأخر', labelEn: 'Late Done' },
-            CANCELLED:      { color: 'text-slate-400',   bg: 'bg-white', ring: 'ring-slate-300',   Icon: XCircle,       labelAr: 'ملغي',       labelEn: 'Cancelled' },
           } as const;
           type CardStatus = keyof typeof CARD_STYLES;
           const allSections: {
@@ -661,7 +664,6 @@ export default function WorkOrders() {
                 { status: 'OVERDUE',        count: execOverdue       },
                 { status: 'COMPLETED',      count: execCompleted     },
                 { status: 'COMPLETED_LATE', count: execCompletedLate },
-                { status: 'CANCELLED',      count: execCancelled     },
               ],
             },
             {
@@ -673,7 +675,6 @@ export default function WorkOrders() {
                 { status: 'OVERDUE',        count: finOverdue        },
                 { status: 'COMPLETED',      count: finCompleted      },
                 { status: 'COMPLETED_LATE', count: finCompletedLate  },
-                { status: 'CANCELLED',      count: finCancelled      },
               ],
             },
           ];
@@ -693,7 +694,7 @@ export default function WorkOrders() {
                     <span className={`text-sm font-bold ${section.titleCls}`}>{lang === 'en' ? section.titleEn : section.titleAr}</span>
                     {isCardsLoading && <span className="text-xs text-slate-400 mr-2">{lang === 'en' ? 'Loading...' : 'جاري التحميل...'}</span>}
                   </div>
-                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-0">
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-0">
                     {section.cards.map(({ status, count }) => {
                       const s = CARD_STYLES[status];
                       const active = filterCat?.cat === section.cat && filterCat?.status === status;
@@ -727,7 +728,6 @@ export default function WorkOrders() {
             { value: 'OVERDUE',        labelAr: 'متأخر',       labelEn: 'Overdue'    },
             { value: 'COMPLETED',      labelAr: 'منجز',        labelEn: 'Done'       },
             { value: 'COMPLETED_LATE', labelAr: 'منجز متأخر',  labelEn: 'Late Done'  },
-            { value: 'CANCELLED',      labelAr: 'ملغى',        labelEn: 'Cancelled'  },
             { value: 'CLOSED',         labelAr: 'مغلق',        labelEn: 'Closed'     },
             { value: 'NONE',           labelAr: 'بدون بيانات', labelEn: 'No data'    },
           ];
@@ -737,7 +737,6 @@ export default function WorkOrders() {
             OVERDUE:        { labelAr: 'متأخر',      labelEn: 'Overdue',   cls: 'bg-red-50     text-red-700     border-red-200'     },
             COMPLETED:      { labelAr: 'منجز',       labelEn: 'Done',      cls: 'bg-indigo-50  text-indigo-700  border-indigo-100'  },
             COMPLETED_LATE: { labelAr: 'منجز متأخر', labelEn: 'Late Done', cls: 'bg-slate-100  text-slate-600   border-slate-300'   },
-            CANCELLED:      { labelAr: 'ملغي',       labelEn: 'Cancelled', cls: 'bg-slate-100  text-slate-500   border-slate-300'   },
           };
           return (
             <div className="bg-white rounded-xl border border-slate-200">
