@@ -815,6 +815,7 @@ router.get('/kpi-alerts/closed-not-invoiced', authenticate, async (req: AuthRequ
         sectorNameAr:       sectorNameAr ?? null,
         invoiceType:        invType ?? null,
         proc155CloseDate:   wo.proc155CloseDate,
+        financialCloseDate: (wo as any).financialCloseDate ?? null,
         invoiceNumber:      wo.invoiceNumber ?? null,
         invoice1:           inv1Val || null,
         invoice2Number:     wo.invoice2Number ?? null,

@@ -55,6 +55,13 @@ function buildMetricNote(
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+interface ReportHeader {
+  logoRightUrl: string | null; logoLeftUrl: string | null;
+  companyNameAr: string | null; companyNameEn: string | null;
+  logoRightWidthPdf: number; logoLeftWidthPdf: number;
+  logoRightWidthExcel: number; logoLeftWidthExcel: number;
+}
+
 interface DateBasisOption { type: string; labelAr: string; labelEn: string; columnKey: string | null }
 interface MetricResult { code: string; nameAr: string; nameEn?: string; metricType?: 'DATE_DIFF' | 'NUMERIC_AGG'; aggFunction?: string | null; avgDays: number | null; totalDays: number; count: number; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null }
 interface Config {
@@ -558,7 +565,7 @@ function FinClosureCard({ finStats }: { finStats: FinCounts }) {
       <div className="flex items-start justify-between mb-2.5 gap-2">
         <div className="text-sm font-semibold text-slate-700 leading-snug">{lang === 'en' ? 'Financial Closure' : 'الإغلاق المالي'}</div>
         {finStats.slaDays && (
-          <span className="text-[11px] shrink-0 px-2 py-0.5 rounded-full font-medium" style={{ background: '#eef2ff', color: '#4338ca', border: '1px solid #c7d2fe' }}>
+          <span className="text-[11px] shrink-0 px-2 py-0.5 rounded-full font-medium" style={{ background: '#f1f5f9', color: '#1e293b', border: '1px solid #cbd5e1' }}>
             SLA {finStats.slaDays} {lang === 'en' ? 'days' : 'يوم'}
           </span>
         )}
@@ -914,6 +921,9 @@ export default function PeriodicKpiReport() {
   const { lang } = useLang();
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
+  // ── Report header (branding for exports)
+  const [reportHdr, setReportHdr] = useState<ReportHeader | null>(null);
+
   // ── Server data
   const [config, setConfig] = useState<Config | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -959,41 +969,59 @@ export default function PeriodicKpiReport() {
   const [kpiDrawerRows,    setKpiDrawerRows]    = useState<any[]>([]);
   const [kpiDrawerLoading, setKpiDrawerLoading] = useState(false);
   const [kpiDrawerTotal,   setKpiDrawerTotal]   = useState(0);
+  const [kpiColKeys,       setKpiColKeys]       = useState<string[]>(['orderNumber','regionNameAr','sectorNameAr','proc155CloseDate','invoiceNumber','estimatedValue','invoiceType','invoice1','invoice2','financialCloseDate','invoice2Number','approxValue']);
+  const [kpiPickerOpen,    setKpiPickerOpen]    = useState(false);
 
   // ── KPI drill-down drawer state (مفوتر ولم يصدر له شهادة إنجاز) ──────────
   const [certDrawerOpen,    setCertDrawerOpen]    = useState(false);
   const [certDrawerRows,    setCertDrawerRows]    = useState<any[]>([]);
   const [certDrawerLoading, setCertDrawerLoading] = useState(false);
   const [certDrawerTotal,   setCertDrawerTotal]   = useState(0);
+  const [certColKeys,       setCertColKeys]       = useState<string[]>(['orderNumber','regionNameAr','sectorNameAr','proc155CloseDate','invoiceNumber','invoiceType','invoice1','invoiceBillingDate','approxInvoice2','totalEst']);
+  const [certPickerOpen,    setCertPickerOpen]    = useState(false);
+
+  // ── Shared helper: build sorted availableCols for any drawer ────────────
+  // catalog: already sort_order-sorted from API
+  // nonVirtual: region/sector — inserted right after orderNumber
+  // virtual: computed cols — appended at end
+  // excluded: keys to remove from catalog (district, raw IDs, special keys)
+  const buildDrawerCols = (
+    catalog: { key: string; labelAr: string; labelEn: string; dataType?: string; virtual?: boolean }[],
+    nonVirtual: { key: string; labelAr: string; labelEn: string; dataType?: string; virtual?: boolean }[],
+    virtual: { key: string; labelAr: string; labelEn: string; dataType?: string; virtual?: boolean }[],
+    excluded: Set<string>,
+  ) => {
+    const cats = catalog.filter(c => !excluded.has(c.key));
+    const anchorIdx = cats.findIndex(c => c.key === 'orderNumber');
+    const insertAt = anchorIdx >= 0 ? anchorIdx + 1 : 0;
+    const result = [...cats];
+    result.splice(insertAt, 0, ...nonVirtual);
+    return [...result, ...virtual];
+  };
 
   // ── KPI drill-down drawer state (شهادات الإنجاز المكتملة) ────────────────
   const COMP_CERT_MAX_COLS = 12;
 
   // الأعمدة الخاصة بهذا الـ drawer (غير موجودة في columnCatalog)
-  const COMP_CERT_SPECIAL: { key: string; labelAr: string; labelEn: string; dataType: string }[] = useMemo(() => [
+  const COMP_CERT_SPECIAL: { key: string; labelAr: string; labelEn: string; dataType: string; virtual?: boolean }[] = useMemo(() => [
     { key: 'regionNameAr',  labelAr: 'المنطقة',         labelEn: 'Region',         dataType: 'text' },
     { key: 'sectorNameAr',  labelAr: 'القطاع',           labelEn: 'Sector',         dataType: 'text' },
-    { key: 'totalInvoiced', labelAr: 'الإجمالي المفوتر', labelEn: 'Total Invoiced', dataType: 'numeric' },
+    { key: 'totalInvoiced', labelAr: 'الإجمالي المفوتر', labelEn: 'Total Invoiced', dataType: 'numeric', virtual: true },
   ], []);
 
-  // كل الأعمدة المتاحة = الخاصة + جميع أعمدة الكتالوج
-  // نستبعد sectorId و regionId لأنهما ممثَّلان بـ sectorNameAr و regionNameAr
-  const compCertAvailableCols = useMemo(() => {
-    const excludedKeys = new Set([
-      ...COMP_CERT_SPECIAL.map(c => c.key),
-      'sectorId', 'regionId',
-    ]);
-    return [
-      ...COMP_CERT_SPECIAL,
-      ...catalogCols.filter((c: { key: string }) => !excludedKeys.has(c.key)),
-    ];
-  }, [catalogCols, COMP_CERT_SPECIAL]);
+  const compCertAvailableCols = useMemo(() =>
+    buildDrawerCols(
+      catalogCols,
+      COMP_CERT_SPECIAL.filter((c: { virtual?: boolean }) => !c.virtual),
+      COMP_CERT_SPECIAL.filter((c: { virtual?: boolean }) => c.virtual),
+      new Set([...COMP_CERT_SPECIAL.map((c: { key: string }) => c.key), 'sectorId', 'regionId', 'district']),
+    ),
+  [catalogCols, COMP_CERT_SPECIAL]);
 
-  // الأعمدة الافتراضية عند فتح الـ drawer (بدون الحي)
   const COMP_CERT_DEFAULT_KEYS = [
-    'orderNumber', 'regionNameAr', 'sectorNameAr', 'invoiceType',
-    'proc155CloseDate', 'invoiceNumber', 'invoice1',
-    'invoice2Number', 'invoice2', 'totalInvoiced',
+    'orderNumber', 'regionNameAr', 'sectorNameAr',
+    'proc155CloseDate', 'invoiceNumber', 'invoiceType',
+    'invoice1', 'invoice2', 'invoice2Number', 'totalInvoiced',
   ];
 
   const [compCertDrawerOpen,    setCompCertDrawerOpen]    = useState(false);
@@ -1010,6 +1038,49 @@ export default function PeriodicKpiReport() {
       .filter(Boolean) as { key: string; labelAr: string; labelEn: string; dataType?: string }[],
   [compCertColKeys, compCertAvailableCols]);
 
+  // ── Column config: مغلقة لم تُفوتر ──────────────────────────────────────
+  const KPI_MAX_COLS = 13;
+  const KPI_SPECIAL = useMemo(() => [
+    { key: 'regionNameAr', labelAr: 'المنطقة',            labelEn: 'Region',           dataType: 'text' },
+    { key: 'sectorNameAr', labelAr: 'القطاع',              labelEn: 'Sector',           dataType: 'text' },
+    { key: 'approxValue',  labelAr: 'غير مفوتر (تقريبي)',  labelEn: 'Approx. Unbilled', dataType: 'numeric', virtual: true },
+  ], []);
+  const kpiAvailableCols = useMemo(() =>
+    buildDrawerCols(
+      catalogCols,
+      KPI_SPECIAL.filter((c: { virtual?: boolean }) => !c.virtual),
+      KPI_SPECIAL.filter((c: { virtual?: boolean }) => c.virtual),
+      new Set([...KPI_SPECIAL.map((c: { key: string }) => c.key), 'sectorId', 'regionId', 'district']),
+    ),
+  [catalogCols, KPI_SPECIAL]);
+  const kpiVisibleCols = useMemo(() =>
+    kpiColKeys
+      .map((key: string) => kpiAvailableCols.find((c: { key: string }) => c.key === key))
+      .filter(Boolean) as { key: string; labelAr: string; labelEn: string; dataType?: string; virtual?: boolean }[],
+  [kpiColKeys, kpiAvailableCols]);
+
+  // ── Column config: مفوتر ولم يصدر له شهادة إنجاز ─────────────────────────
+  const CERT_MAX_COLS = 12;
+  const CERT_SPECIAL = useMemo(() => [
+    { key: 'regionNameAr',   labelAr: 'المنطقة',           labelEn: 'Region',        dataType: 'text' },
+    { key: 'sectorNameAr',   labelAr: 'القطاع',             labelEn: 'Sector',        dataType: 'text' },
+    { key: 'approxInvoice2', labelAr: 'م.2 (تقديري)',       labelEn: 'Inv.2 (Est.)', dataType: 'numeric', virtual: true },
+    { key: 'totalEst',       labelAr: 'الإجمالي (تقديري)',  labelEn: 'Total (Est.)', dataType: 'numeric', virtual: true },
+  ], []);
+  const certAvailableCols = useMemo(() =>
+    buildDrawerCols(
+      catalogCols,
+      CERT_SPECIAL.filter((c: { virtual?: boolean }) => !c.virtual),
+      CERT_SPECIAL.filter((c: { virtual?: boolean }) => c.virtual),
+      new Set([...CERT_SPECIAL.map((c: { key: string }) => c.key), 'sectorId', 'regionId', 'district']),
+    ),
+  [catalogCols, CERT_SPECIAL]);
+  const certVisibleCols = useMemo(() =>
+    certColKeys
+      .map((key: string) => certAvailableCols.find((c: { key: string }) => c.key === key))
+      .filter(Boolean) as { key: string; labelAr: string; labelEn: string; dataType?: string; virtual?: boolean }[],
+  [certColKeys, certAvailableCols]);
+
   // ── Shared special cols for new KpiDrawers ───────────────────────────────
   const KD_REGION_SECTOR: KpiCol[] = useMemo(() => [
     { key: 'regionNameAr',  labelAr: 'المنطقة',  labelEn: 'Region',  dataType: 'text' },
@@ -1019,39 +1090,40 @@ export default function PeriodicKpiReport() {
   const KD_GENERAL_STATUS: KpiCol = { key: 'generalStatus', labelAr: 'الحالة', labelEn: 'Status', dataType: 'text', virtual: true };
   const KD_METRIC_DAYS:    KpiCol = { key: 'metricDays',    labelAr: 'المدة (يوم)', labelEn: 'Days', dataType: 'integer', virtual: true };
 
-  // Base available cols for drawers (catalog + region/sector, exclude raw IDs)
-  const kdBaseCols: KpiCol[] = useMemo(() => {
-    const excluded = new Set(['sectorId', 'regionId']);
-    return [
-      ...KD_REGION_SECTOR,
-      ...catalogCols.filter((c: { key: string }) => !excluded.has(c.key)),
-    ];
-  }, [catalogCols, KD_REGION_SECTOR]);
+  // Base available cols for drawers — catalog sorted, region/sector after orderNumber, district excluded
+  const kdBaseCols: KpiCol[] = useMemo(() =>
+    buildDrawerCols(
+      catalogCols,
+      KD_REGION_SECTOR,
+      [],
+      new Set(['sectorId', 'regionId', 'district']),
+    ) as KpiCol[],
+  [catalogCols, KD_REGION_SECTOR]);
 
   // Status drawer
   const [statusDrawer, setStatusDrawer] = useState<{ status: string; rows: any[]; loading: boolean } | null>(null);
   const [statusDrawerColKeys, setStatusDrawerColKeys] = useState<string[]>([
-    'orderNumber', 'projectType', 'district', 'regionNameAr', 'sectorNameAr', 'assignmentDate', 'generalStatus',
+    'orderNumber', 'regionNameAr', 'sectorNameAr', 'projectType', 'assignmentDate', 'generalStatus',
   ]);
   const statusDrawerAvailCols: KpiCol[] = useMemo(() => [
-    KD_GENERAL_STATUS,
     ...kdBaseCols,
+    KD_GENERAL_STATUS,
   ], [kdBaseCols]);
 
   // Metric drawer
   const [metricDrawer, setMetricDrawer] = useState<{ code: string; nameAr: string; nameEn: string | null; rows: any[]; loading: boolean } | null>(null);
   const [metricDrawerColKeys, setMetricDrawerColKeys] = useState<string[]>([
-    'orderNumber', 'projectType', 'district', 'regionNameAr', 'sectorNameAr', 'assignmentDate', 'metricDays',
+    'orderNumber', 'regionNameAr', 'sectorNameAr', 'projectType', 'assignmentDate', 'metricDays',
   ]);
   const metricDrawerAvailCols: KpiCol[] = useMemo(() => [
-    KD_METRIC_DAYS,
     ...kdBaseCols,
+    KD_METRIC_DAYS,
   ], [kdBaseCols]);
 
   // Billing drawer
   const [billingDrawer, setBillingDrawer] = useState<{ type: 'partialBilled' | 'notFullyBilled'; rows: any[]; loading: boolean } | null>(null);
   const [billingDrawerColKeys, setBillingDrawerColKeys] = useState<string[]>([
-    'orderNumber', 'invoiceType', 'invoice1', 'invoice2', 'collectedAmount', 'estimatedValue', 'regionNameAr', 'sectorNameAr',
+    'orderNumber', 'regionNameAr', 'sectorNameAr', 'estimatedValue', 'invoiceType', 'invoice1', 'invoice2', 'collectedAmount',
   ]);
   const billingDrawerAvailCols: KpiCol[] = useMemo(() => kdBaseCols, [kdBaseCols]);
 
@@ -1128,6 +1200,8 @@ export default function PeriodicKpiReport() {
   const ccFmtDate  = (v: any) => { try { return v ? new Date(v).toLocaleDateString('en-CA') : '—'; } catch { return '—'; } };
   const ccFmtCell  = (v: any, col: { dataType?: string; key?: string }) =>
     ccIsDate(col) ? ccFmtDate(v) : ccIsNum(col) ? ccFmtNum(v) : (v ?? '—');
+  const certGetVal = (row: any, key: string) =>
+    key === 'totalEst' ? (row.invoice1 != null ? row.invoice1 * 2 : null) : ccGetVal(row, key);
 
   const openCompletedWithCertDrawer = useCallback(async () => {
     if (!appliedFilters) return;
@@ -1194,6 +1268,23 @@ export default function PeriodicKpiReport() {
     } catch (e) { console.error(e); }
     finally { setKpiDrawerLoading(false); }
   }, [appliedFilters]);
+
+  // ── Load report header once (for PDF/Excel branding) ─────────────────────
+  useEffect(() => {
+    api.get('/admin/report-header').then(r => {
+      const d = r.data;
+      setReportHdr({
+        logoRightUrl:        d.logoRightUrl        ?? null,
+        logoLeftUrl:         d.logoLeftUrl         ?? null,
+        companyNameAr:       d.companyNameAr       ?? null,
+        companyNameEn:       d.companyNameEn       ?? null,
+        logoRightWidthPdf:   d.logoRightWidthPdf   ?? 150,
+        logoLeftWidthPdf:    d.logoLeftWidthPdf    ?? 150,
+        logoRightWidthExcel: d.logoRightWidthExcel ?? 150,
+        logoLeftWidthExcel:  d.logoLeftWidthExcel  ?? 150,
+      });
+    }).catch(() => {});
+  }, []);
 
   // ── Load config once ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -2171,34 +2262,79 @@ export default function PeriodicKpiReport() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {/* Column Picker */}
+                <button
+                  onClick={() => setKpiPickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 text-xs font-medium hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Columns' : 'الأعمدة'}
+                </button>
                 {/* Export Excel */}
                 <button
                   onClick={async () => {
                     try {
+                      const isAr = lang !== 'en';
                       const ExcelJS = (await import('exceljs')).default;
                       const wb = new ExcelJS.Workbook();
-                      const ws = wb.addWorksheet(lang === 'en' ? 'Closed w/o Invoice' : 'مغلقة لم تُفوتر');
-                      ws.views = [{ rightToLeft: lang !== 'en' }];
-                      const headers = lang === 'en'
-                        ? ['Work Order','District','Region','Sector','Invoice Type','155 Close Date','Financial Close Date','Inv.1 No.','Inv.1 Value','Inv.2 No.','Inv.2 Value','Est. Value','Approx. Unbilled']
-                        : ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ إجراء 155','تاريخ الإغلاق المالي','رقم م.1','قيمة م.1','رقم م.2','قيمة م.2','القيمة التقديرية','القيمة غير المفوترة (تقريبي)'];
-                      ws.addRow(headers).font = { bold: true };
-                      kpiDrawerRows.forEach(r => {
-                        ws.addRow([
-                          r.orderNumber, r.district, r.regionNameAr, r.sectorNameAr,
-                          r.invoiceType,
-                          r.proc155CloseDate ? new Date(r.proc155CloseDate).toLocaleDateString('en-CA') : '',
-                          r.financialCloseDate ? new Date(r.financialCloseDate).toLocaleDateString('en-CA') : '',
-                          r.invoiceNumber, r.invoice1, r.invoice2Number, r.invoice2,
-                          r.estimatedValue, r.approxValue,
-                        ]);
+                      const ws = wb.addWorksheet(isAr ? 'مغلقة لم تُفوتر' : 'Closed w/o Invoice');
+                      ws.views = [{ rightToLeft: isAr }];
+                      const colHeaders = kpiVisibleCols.map(c => isAr ? c.labelAr : c.labelEn);
+                      const nc = colHeaders.length;
+                      const setC = (rowNum: number, val: string, bold: boolean, size: number, color: string) => {
+                        if (nc > 1) ws.mergeCells(rowNum, 1, rowNum, nc);
+                        const row = ws.getRow(rowNum); row.height = bold ? 28 : 16;
+                        const cell = row.getCell(1); cell.value = val;
+                        cell.font = { bold, size, color: { argb: color } };
+                        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                      };
+                      const compName = (isAr ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                      let rp = 1;
+                      if (compName) setC(rp++, compName, true, 14, 'FF334155');
+                      setC(rp++, isAr ? 'مغلقة لم تُفوتر' : 'Closed w/o Invoice', true, 12, 'FF334155');
+                      setC(rp++, `${isAr ? 'التاريخ:' : 'Date:'} ${new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-CA')}`, false, 10, 'FF64748b');
+                      ws.getRow(rp++).height = 6;
+                      const HR = ws.getRow(rp); HR.height = 22;
+                      colHeaders.forEach((h, i) => {
+                        const cell = HR.getCell(i + 1); cell.value = h;
+                        cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+                        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                        cell.border = { top:{style:'thin',color:{argb:'FFFFFFFF'}}, left:{style:'thin',color:{argb:'FFFFFFFF'}}, bottom:{style:'thin',color:{argb:'FFFFFFFF'}}, right:{style:'thin',color:{argb:'FFFFFFFF'}} };
                       });
-                      ws.columns.forEach(col => { col.width = 18; });
+                      const ds = ++rp;
+                      const bdr = { style: 'thin' as const, color: { argb: 'FFcbd5e1' } };
+                      kpiDrawerRows.forEach((r: any, ri: number) => {
+                        const row = ws.getRow(ds + ri); row.height = 17;
+                        kpiVisibleCols.forEach((c, ci) => {
+                          const v = ccGetVal(r, c.key);
+                          const cell = row.getCell(ci + 1);
+                          cell.value = ccIsDate(c) ? ccFmtDate(v) : ccIsNum(c) ? (v != null && v !== '' ? Number(v) : '') : (v ?? '');
+                          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ri % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
+                          cell.border = { top: bdr, left: bdr, bottom: bdr, right: bdr };
+                          cell.alignment = { horizontal: isAr ? 'right' : 'left', vertical: 'middle' };
+                        });
+                      });
+                      const approxIdxXL = kpiVisibleCols.findIndex((c: { key: string }) => c.key === 'approxValue');
+                      if (approxIdxXL >= 0) {
+                        const totRow = ws.getRow(ds + kpiDrawerRows.length); totRow.height = 18;
+                        const tbdr = { style: 'medium' as const, color: { argb: 'FF334155' } };
+                        kpiVisibleCols.forEach((_: unknown, ci: number) => {
+                          const cell = totRow.getCell(ci + 1);
+                          cell.value = ci === approxIdxXL ? kpiDrawerTotal : ci === approxIdxXL - 1 ? (isAr ? 'الإجمالي' : 'Total') : '';
+                          cell.font = { bold: true, color: { argb: 'FF334155' }, size: 11 };
+                          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFe2e8f0' } };
+                          cell.alignment = { horizontal: isAr ? 'right' : 'left', vertical: 'middle' };
+                          cell.border = { top: tbdr, left: bdr, bottom: bdr, right: bdr };
+                        });
+                      }
+                      ws.columns = colHeaders.map(() => ({ width: 18 }));
                       const buf = await wb.xlsx.writeBuffer();
-                      const a = document.createElement('a');
-                      a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-                      a.download = `closed-not-invoiced-${new Date().toISOString().slice(0,10)}.xlsx`;
-                      a.click();
+                      const a = Object.assign(document.createElement('a'), {
+                        href: URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })),
+                        download: `closed-not-invoiced-${new Date().toISOString().slice(0,10)}.xlsx`,
+                      });
+                      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
                     } catch(e) { console.error(e); }
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
@@ -2210,45 +2346,57 @@ export default function PeriodicKpiReport() {
                 <button
                   onClick={() => {
                     const isAr = lang !== 'en';
-                    const headers = isAr
-                      ? ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ إجراء 155','تاريخ الإغلاق المالي','رقم م.1','قيمة م.1','رقم م.2','قيمة م.2','القيمة التقديرية','غير مفوتر (تقريبي)']
-                      : ['Work Order','District','Region','Sector','Inv. Type','155 Close','Fin. Close','Inv.1 No.','Inv.1 Val.','Inv.2 No.','Inv.2 Val.','Est. Value','Approx. Unbilled'];
+                    const headers = kpiVisibleCols.map((c: { labelAr: string; labelEn: string }) => isAr ? c.labelAr : c.labelEn);
                     const fmtNum = (v: any) => v != null ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
-                    const fmtDate = (v: any) => v ? new Date(v).toLocaleDateString('en-CA') : '—';
-                    const rows = kpiDrawerRows.map((r: any) => [
-                      r.orderNumber ?? '—', r.district ?? '—', r.regionNameAr ?? '—', r.sectorNameAr ?? '—',
-                      r.invoiceType ?? '—', fmtDate(r.proc155CloseDate), fmtDate(r.financialCloseDate),
-                      r.invoiceNumber ?? '—', fmtNum(r.invoice1), r.invoice2Number ?? '—', fmtNum(r.invoice2),
-                      fmtNum(r.estimatedValue), fmtNum(r.approxValue),
-                    ]);
+                    const tableRows = kpiDrawerRows.map((r: any, i: number) => {
+                      const cells = kpiVisibleCols.map((c: { key: string; dataType?: string }) => {
+                        const v = ccGetVal(r, c.key);
+                        const isN = ccIsNum(c); const isD = ccIsDate(c);
+                        return `<td style="text-align:${isN?'left':'right'};direction:${isN||isD?'ltr':'rtl'}">${ccFmtCell(v, c)}</td>`;
+                      }).join('');
+                      return `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${cells}</tr>`;
+                    }).join('');
                     const totalVal = fmtNum(kpiDrawerTotal);
-                    const tableRows = rows.map((row: string[], i: number) =>
-                      `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${row.map((cell: string, ci: number) => `<td style="text-align:${ci>=8?'left':'right'};direction:${ci>=8?'ltr':'rtl'}">${cell}</td>`).join('')}</tr>`
-                    ).join('');
-                    const colSpan = headers.length - 1;
-                    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                    const approxIdxPR = kpiVisibleCols.findIndex((c: { key: string }) => c.key === 'approxValue');
+                    const footerRow = approxIdxPR >= 0
+                      ? `<tfoot><tr style="border-top:2px solid #334155">${kpiVisibleCols.map((_: unknown, i: number) => i < approxIdxPR - 1 ? '<td></td>' : i === approxIdxPR - 1 ? `<td style="text-align:right">${isAr?'الإجمالي':'Total'}</td>` : `<td style="text-align:left;direction:ltr">${totalVal}</td>`).join('')}</tr></tfoot>`
+                      : '';
+                    const compName = (isAr ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                    const lw = reportHdr?.logoLeftWidthPdf ?? 120;
+                    const rw = reportHdr?.logoRightWidthPdf ?? 120;
+                    const leftLogo  = reportHdr?.logoLeftUrl  ? `<img src="${reportHdr.logoLeftUrl}"  style="width:${lw}px;max-height:60px;object-fit:contain" />` : '';
+                    const rightLogo = reportHdr?.logoRightUrl ? `<img src="${reportHdr.logoRightUrl}" style="width:${rw}px;max-height:60px;object-fit:contain" />` : '';
+                    const html = `<!DOCTYPE html><html dir="${isAr?'rtl':'ltr'}"><head><meta charset="utf-8">
                       <title>${isAr ? 'مغلقة لم تُفوتر' : 'Closed w/o Invoice'}</title>
                       <style>
-                        body { font-family: Arial, sans-serif; font-size: 11px; direction: rtl; margin: 16px; }
-                        h2 { font-size: 14px; margin-bottom: 4px; }
-                        .sub { font-size: 11px; color: #666; margin-bottom: 12px; }
-                        table { width: 100%; border-collapse: collapse; page-break-inside: auto; }
-                        tr { page-break-inside: avoid; }
-                        th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 10px; text-align: right; }
-                        td { border: 1px solid #e2e8f0; padding: 4px 8px; }
-                        tfoot td { font-weight: bold; background: #eef2ff; border-top: 2px solid #818cf8; }
-                        @page { size: landscape; margin: 12mm; }
+                        body{font-family:Arial,sans-serif;font-size:11px;direction:${isAr?'rtl':'ltr'};margin:0;padding:16px}
+                        .sub{font-size:11px;color:#666;margin-bottom:12px}
+                        table{width:100%;border-collapse:collapse;page-break-inside:auto}
+                        tr{page-break-inside:avoid}
+                        th{background:#334155;color:#fff;border:1px solid #fff;padding:5px 8px;font-size:10px;text-align:right}
+                        td{border:1px solid #e2e8f0;padding:4px 8px}
+                        tfoot td{font-weight:bold;background:#e2e8f0;color:#334155;border-top:2px solid #334155}
+                        @page{size:landscape;margin:12mm}
                       </style></head><body>
-                      <h2>${isAr ? 'مغلقة لم تُفوتر — التفاصيل' : 'Closed w/o Invoice — Detail'}</h2>
+                      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 8px;background:#f8fafc;border-bottom:3px solid #334155;margin-bottom:12px;">
+                        <div style="width:${lw}px;display:flex;align-items:center;justify-content:center">${leftLogo}</div>
+                        <div style="flex:1;text-align:center;padding:0 12px;direction:${isAr?'rtl':'ltr'}">
+                          ${compName?`<div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:4px">${compName}</div>`:''}
+                          <div style="font-size:11px;color:#334155">${isAr?'مغلقة لم تُفوتر':'Closed w/o Invoice'}</div>
+                          <div style="font-size:10px;color:#64748b;margin-top:2px">${new Date().toLocaleDateString(isAr?'ar-SA':'en-CA')}</div>
+                        </div>
+                        <div style="width:${rw}px;display:flex;align-items:center;justify-content:center">${rightLogo}</div>
+                      </div>
                       <div class="sub">${kpiDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س':'SAR'}</div>
                       <table>
-                        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+                        <thead><tr>${headers.map((h: string)=>`<th>${h}</th>`).join('')}</tr></thead>
                         <tbody>${tableRows}</tbody>
-                        <tfoot><tr><td colspan="${colSpan}" style="text-align:right">${isAr?'الإجمالي':'Total'}</td><td style="text-align:left;direction:ltr">${totalVal}</td></tr></tfoot>
+                        ${footerRow}
                       </table>
+                      <script>window.addEventListener('load',function(){window.focus();window.print();});<\/script>
                       </body></html>`;
                     const pw = window.open('', '_blank', 'width=1100,height=700');
-                    if (pw) { pw.document.write(html); pw.document.close(); pw.focus(); pw.print(); }
+                    if (pw) { pw.document.write(html); pw.document.close(); }
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 transition-colors"
                 >
@@ -2288,66 +2436,49 @@ export default function PeriodicKpiReport() {
                   <table className="w-full text-xs border-collapse min-w-[800px]">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        {[
-                          lang === 'en' ? 'Work Order' : 'أمر العمل',
-                          lang === 'en' ? 'District' : 'الحي',
-                          lang === 'en' ? 'Region' : 'المنطقة',
-                          lang === 'en' ? 'Sector' : 'القطاع',
-                          lang === 'en' ? 'Inv. Type' : 'نوع المستخلص',
-                          lang === 'en' ? '155 Close' : 'إجراء 155',
-                          lang === 'en' ? 'Fin. Close' : 'إغلاق مالي',
-                          lang === 'en' ? 'Inv.1 No.' : 'رقم م.1',
-                          lang === 'en' ? 'Inv.1 Val.' : 'قيمة م.1',
-                          lang === 'en' ? 'Inv.2 No.' : 'رقم م.2',
-                          lang === 'en' ? 'Inv.2 Val.' : 'قيمة م.2',
-                          lang === 'en' ? 'Est. Value' : 'القيمة التقديرية',
-                          lang === 'en' ? 'Approx. Unbilled' : 'غير مفوتر (تقريبي)',
-                        ].map(h => (
-                          <th key={h} className="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200">{h}</th>
+                        {kpiVisibleCols.map((col: { key: string; labelAr: string; labelEn: string; dataType?: string }) => (
+                          <th key={col.key} className={`px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200 ${ccIsNum(col) ? 'text-left' : 'text-right'}`}>
+                            {lang === 'en' ? col.labelEn : col.labelAr}
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {kpiDrawerRows.map((row, i) => (
+                      {kpiDrawerRows.map((row: any, i: number) => (
                         <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
-                          <td className="px-3 py-2 font-medium text-indigo-700 whitespace-nowrap">{row.orderNumber ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.district ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.regionNameAr ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.sectorNameAr ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceType ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
-                            {row.proc155CloseDate ? new Date(row.proc155CloseDate).toLocaleDateString('en-CA') : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
-                            {row.financialCloseDate ? new Date(row.financialCloseDate).toLocaleDateString('en-CA') : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceNumber ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
-                            {row.invoice1 != null ? row.invoice1.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoice2Number ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
-                            {row.invoice2 != null ? row.invoice2.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
-                            {row.estimatedValue != null ? row.estimatedValue.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
-                          <td className="px-3 py-2 font-semibold text-orange-600 whitespace-nowrap text-left" dir="ltr">
-                            {row.approxValue != null ? row.approxValue.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
+                          {kpiVisibleCols.map((col: { key: string; labelAr: string; labelEn: string; dataType?: string }) => {
+                            const v = ccGetVal(row, col.key);
+                            const isNum    = ccIsNum(col);
+                            const isDate   = ccIsDate(col);
+                            const isOrder  = col.key === 'orderNumber';
+                            const isApprox = col.key === 'approxValue';
+                            return (
+                              <td
+                                key={col.key}
+                                className={`px-3 py-2 whitespace-nowrap ${isOrder ? 'font-medium text-indigo-700' : isApprox ? 'font-semibold text-orange-600 text-left' : isNum ? 'text-slate-700 text-left' : 'text-slate-600'}`}
+                                dir={isNum || isDate ? 'ltr' : undefined}
+                              >
+                                {ccFmtCell(v, col)}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot>
-                      <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
-                        <td colSpan={12} className="px-3 py-2 text-right text-slate-600">
-                          {lang === 'en' ? 'Total Approx. Unbilled' : 'إجمالي غير المفوتر (تقريبي)'}
-                        </td>
-                        <td className="px-3 py-2 text-indigo-600 text-left" dir="ltr">
-                          {kpiDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                      </tr>
-                    </tfoot>
+                    {kpiVisibleCols.some((c: { key: string }) => c.key === 'approxValue') && (() => {
+                      const approxIdx = kpiVisibleCols.findIndex((c: { key: string }) => c.key === 'approxValue');
+                      return (
+                        <tfoot>
+                          <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
+                            {kpiVisibleCols.map((col: { key: string }, i: number) => (
+                              <td key={col.key} className={`px-3 py-2 ${i === approxIdx ? 'text-indigo-600 text-left' : i === approxIdx - 1 ? 'text-right text-slate-600' : ''}`} dir={i === approxIdx ? 'ltr' : undefined}>
+                                {i === approxIdx ? kpiDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 }) : i === approxIdx - 1 ? (lang === 'en' ? 'Total Approx. Unbilled' : 'إجمالي غير المفوتر (تقريبي)') : ''}
+                              </td>
+                            ))}
+                          </tr>
+                        </tfoot>
+                      );
+                    })()}
                   </table>
                 </div>
               )}
@@ -2378,33 +2509,82 @@ export default function PeriodicKpiReport() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {/* Column Picker */}
+                <button
+                  onClick={() => setCertPickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 border border-slate-200 text-xs font-medium hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  {lang === 'en' ? 'Columns' : 'الأعمدة'}
+                </button>
                 {/* Excel */}
                 <button
                   onClick={async () => {
                     try {
+                      const isAr2 = lang !== 'en';
                       const ExcelJS = (await import('exceljs')).default;
                       const wb = new ExcelJS.Workbook();
-                      const ws = wb.addWorksheet(lang === 'en' ? 'Invoiced No Cert' : 'مفوتر بلا شهادة');
-                      ws.views = [{ rightToLeft: lang !== 'en' }];
-                      const headers = lang === 'en'
-                        ? ['Work Order','District','Region','Sector','Inv. Type','155 Date','Inv.1 No.','Inv.1 Value','Billing Date','Inv.2 (Est.)','Total (Est.)']
-                        : ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ 155','رقم م.1','قيمة م.1','تاريخ فوترة م.1','م.2 (تقديري)','الإجمالي (تقديري)'];
-                      ws.addRow(headers).font = { bold: true };
-                      certDrawerRows.forEach((r: any) => {
-                        ws.addRow([
-                          r.orderNumber, r.district, r.regionNameAr, r.sectorNameAr, r.invoiceType,
-                          r.proc155CloseDate ? new Date(r.proc155CloseDate).toLocaleDateString('en-CA') : '',
-                          r.invoiceNumber, r.invoice1,
-                          r.invoiceBillingDate ? new Date(r.invoiceBillingDate).toLocaleDateString('en-CA') : '',
-                          r.approxInvoice2, (r.invoice1 ?? 0) * 2,
-                        ]);
+                      const ws = wb.addWorksheet(isAr2 ? 'مفوتر بلا شهادة' : 'Invoiced No Cert');
+                      ws.views = [{ rightToLeft: isAr2 }];
+                      const headers = certVisibleCols.map((c: { labelAr: string; labelEn: string }) => isAr2 ? c.labelAr : c.labelEn);
+                      const nc2 = headers.length;
+                      const setC2 = (rowNum: number, val: string, bold: boolean, size: number, color: string) => {
+                        if (nc2 > 1) ws.mergeCells(rowNum, 1, rowNum, nc2);
+                        const row2 = ws.getRow(rowNum); row2.height = bold ? 28 : 16;
+                        const cell2 = row2.getCell(1); cell2.value = val;
+                        cell2.font = { bold, size, color: { argb: color } };
+                        cell2.alignment = { horizontal: 'center', vertical: 'middle' };
+                      };
+                      const compName2 = (isAr2 ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                      let rp2 = 1;
+                      if (compName2) setC2(rp2++, compName2, true, 14, 'FF334155');
+                      setC2(rp2++, isAr2 ? 'مفوتر ولم يصدر له شهادة إنجاز' : 'Invoiced No Cert', true, 12, 'FF334155');
+                      setC2(rp2++, `${isAr2 ? 'التاريخ:' : 'Date:'} ${new Date().toLocaleDateString(isAr2 ? 'ar-SA' : 'en-CA')}`, false, 10, 'FF64748b');
+                      ws.getRow(rp2++).height = 6;
+                      const HR2 = ws.getRow(rp2); HR2.height = 22;
+                      headers.forEach((h: string, i: number) => {
+                        const cell2 = HR2.getCell(i + 1); cell2.value = h;
+                        cell2.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+                        cell2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+                        cell2.alignment = { horizontal: 'center', vertical: 'middle' };
+                        cell2.border = { top:{style:'thin',color:{argb:'FFFFFFFF'}}, left:{style:'thin',color:{argb:'FFFFFFFF'}}, bottom:{style:'thin',color:{argb:'FFFFFFFF'}}, right:{style:'thin',color:{argb:'FFFFFFFF'}} };
                       });
-                      ws.columns.forEach(col => { col.width = 18; });
+                      const ds2 = ++rp2;
+                      const bdr2 = { style: 'thin' as const, color: { argb: 'FFcbd5e1' } };
+                      certDrawerRows.forEach((r: any, ri2: number) => {
+                        const row2 = ws.getRow(ds2 + ri2); row2.height = 17;
+                        certVisibleCols.forEach((c: { key: string; dataType?: string }, ci2: number) => {
+                          const v = certGetVal(r, c.key);
+                          const cell2 = row2.getCell(ci2 + 1);
+                          cell2.value = ccIsDate(c) ? ccFmtDate(v) : ccIsNum(c) ? (v != null && v !== '' ? Number(v) : '') : (v ?? '');
+                          cell2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ri2 % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
+                          cell2.border = { top: bdr2, left: bdr2, bottom: bdr2, right: bdr2 };
+                          cell2.alignment = { horizontal: isAr2 ? 'right' : 'left', vertical: 'middle' };
+                        });
+                      });
+                      const approxIdxXL2 = certVisibleCols.findIndex((c: { key: string }) => c.key === 'approxInvoice2');
+                      const totalIdxXL2  = certVisibleCols.findIndex((c: { key: string }) => c.key === 'totalEst');
+                      if (approxIdxXL2 >= 0 || totalIdxXL2 >= 0) {
+                        const totRow2 = ws.getRow(ds2 + certDrawerRows.length); totRow2.height = 18;
+                        const tbdr2 = { style: 'medium' as const, color: { argb: 'FF334155' } };
+                        certVisibleCols.forEach((_: unknown, ci2: number) => {
+                          const cell2 = totRow2.getCell(ci2 + 1);
+                          cell2.value = ci2 === approxIdxXL2 ? certDrawerTotal
+                            : ci2 === totalIdxXL2 ? certDrawerTotal * 2
+                            : ci2 === Math.max(approxIdxXL2, totalIdxXL2) - 1 ? (isAr2 ? 'الإجمالي' : 'Total') : '';
+                          cell2.font = { bold: true, color: { argb: 'FF334155' }, size: 11 };
+                          cell2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFe2e8f0' } };
+                          cell2.alignment = { horizontal: isAr2 ? 'right' : 'left', vertical: 'middle' };
+                          cell2.border = { top: tbdr2, left: bdr2, bottom: bdr2, right: bdr2 };
+                        });
+                      }
+                      ws.columns = headers.map(() => ({ width: 18 }));
                       const buf = await wb.xlsx.writeBuffer();
-                      const a = document.createElement('a');
-                      a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-                      a.download = `invoiced-no-cert-${new Date().toISOString().slice(0,10)}.xlsx`;
-                      a.click();
+                      const a = Object.assign(document.createElement('a'), {
+                        href: URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })),
+                        download: `invoiced-no-cert-${new Date().toISOString().slice(0,10)}.xlsx`,
+                      });
+                      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
                     } catch(e) { console.error(e); }
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
@@ -2415,41 +2595,61 @@ export default function PeriodicKpiReport() {
                 <button
                   onClick={() => {
                     const isAr = lang !== 'en';
-                    const headers = isAr
-                      ? ['أمر العمل','الحي','المنطقة','القطاع','نوع المستخلص','تاريخ 155','رقم م.1','قيمة م.1','تاريخ فوترة م.1','م.2 (تقديري)','الإجمالي (تقديري)']
-                      : ['Work Order','District','Region','Sector','Inv. Type','155 Date','Inv.1 No.','Inv.1 Val.','Billing','Inv.2 (Est.)','Total (Est.)'];
+                    const headers = certVisibleCols.map((c: { labelAr: string; labelEn: string }) => isAr ? c.labelAr : c.labelEn);
                     const fmtNum  = (v: any) => v != null ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
-                    const fmtDate = (v: any) => v ? new Date(v).toLocaleDateString('en-CA') : '—';
-                    const rows = certDrawerRows.map((r: any) => [
-                      r.orderNumber ?? '—', r.district ?? '—', r.regionNameAr ?? '—', r.sectorNameAr ?? '—',
-                      r.invoiceType ?? '—', fmtDate(r.proc155CloseDate),
-                      r.invoiceNumber ?? '—', fmtNum(r.invoice1), fmtDate(r.invoiceBillingDate),
-                      fmtNum(r.approxInvoice2), fmtNum((r.invoice1 ?? 0) * 2),
-                    ]);
+                    const tableRows = certDrawerRows.map((r: any, i: number) => {
+                      const cells = certVisibleCols.map((c: { key: string; dataType?: string }) => {
+                        const v = certGetVal(r, c.key);
+                        const isN = ccIsNum(c); const isD = ccIsDate(c);
+                        return `<td style="text-align:${isN?'left':'right'};direction:${isN||isD?'ltr':'rtl'}">${ccFmtCell(v, c)}</td>`;
+                      }).join('');
+                      return `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${cells}</tr>`;
+                    }).join('');
                     const totalVal = fmtNum(certDrawerTotal);
-                    const tableRows = rows.map((row: string[], i: number) =>
-                      `<tr style="background:${i%2===0?'#fff':'#f9fafb'}">${row.map((cell: string, ci: number) => `<td style="text-align:${ci>=7?'left':'right'};direction:${ci>=7?'ltr':'rtl'}">${cell}</td>`).join('')}</tr>`
-                    ).join('');
-                    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                    const approxIdxPRC = certVisibleCols.findIndex((c: { key: string }) => c.key === 'approxInvoice2');
+                    const totalIdxPRC  = certVisibleCols.findIndex((c: { key: string }) => c.key === 'totalEst');
+                    const certFooter = (approxIdxPRC >= 0 || totalIdxPRC >= 0)
+                      ? `<tfoot><tr style="border-top:2px solid #334155">${certVisibleCols.map((_: unknown, i: number) =>
+                          i === approxIdxPRC ? `<td style="text-align:left;direction:ltr">${totalVal}</td>`
+                          : i === totalIdxPRC ? `<td style="text-align:left;direction:ltr">${fmtNum(certDrawerTotal*2)}</td>`
+                          : i === Math.max(approxIdxPRC,totalIdxPRC) - 1 ? `<td style="text-align:right">${isAr?'الإجمالي':'Total'}</td>`
+                          : '<td></td>').join('')}</tr></tfoot>`
+                      : '';
+                    const compNameC = (isAr ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                    const lwC = reportHdr?.logoLeftWidthPdf ?? 120;
+                    const rwC = reportHdr?.logoRightWidthPdf ?? 120;
+                    const leftLogoC  = reportHdr?.logoLeftUrl  ? `<img src="${reportHdr.logoLeftUrl}"  style="width:${lwC}px;max-height:60px;object-fit:contain" />` : '';
+                    const rightLogoC = reportHdr?.logoRightUrl ? `<img src="${reportHdr.logoRightUrl}" style="width:${rwC}px;max-height:60px;object-fit:contain" />` : '';
+                    const html = `<!DOCTYPE html><html dir="${isAr?'rtl':'ltr'}"><head><meta charset="utf-8">
                       <title>${isAr ? 'مفوتر ولم يصدر له شهادة إنجاز' : 'Invoiced No Cert'}</title>
                       <style>
-                        body{font-family:Arial,sans-serif;font-size:11px;direction:rtl;margin:16px}
-                        h2{font-size:14px;margin-bottom:4px}.sub{font-size:11px;color:#666;margin-bottom:12px}
+                        body{font-family:Arial,sans-serif;font-size:11px;direction:${isAr?'rtl':'ltr'};margin:0;padding:16px}
+                        .sub{font-size:11px;color:#666;margin-bottom:12px}
                         table{width:100%;border-collapse:collapse;page-break-inside:auto}tr{page-break-inside:avoid}
-                        th{background:#eef2ff;border:1px solid #818cf8;padding:5px 8px;font-size:10px;text-align:right}
+                        th{background:#334155;color:#fff;border:1px solid #fff;padding:5px 8px;font-size:10px;text-align:right}
                         td{border:1px solid #e2e8f0;padding:4px 8px}
-                        tfoot td{font-weight:bold;background:#eef2ff;border-top:2px solid #818cf8}
+                        tfoot td{font-weight:bold;background:#e2e8f0;color:#334155;border-top:2px solid #334155}
                         @page{size:landscape;margin:12mm}
                       </style></head><body>
-                      <h2>${isAr ? 'مفوتر ولم يصدر له شهادة إنجاز — التفاصيل' : 'Invoiced No Cert — Detail'}</h2>
+                      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 8px;background:#f8fafc;border-bottom:3px solid #334155;margin-bottom:12px;">
+                        <div style="width:${lwC}px;display:flex;align-items:center;justify-content:center">${leftLogoC}</div>
+                        <div style="flex:1;text-align:center;padding:0 12px;direction:${isAr?'rtl':'ltr'}">
+                          ${compNameC?`<div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:4px">${compNameC}</div>`:''}
+                          <div style="font-size:11px;color:#334155">${isAr?'مفوتر ولم يصدر له شهادة إنجاز':'Invoiced No Cert'}</div>
+                          <div style="font-size:10px;color:#64748b;margin-top:2px">${new Date().toLocaleDateString(isAr?'ar-SA':'en-CA')}</div>
+                        </div>
+                        <div style="width:${rwC}px;display:flex;align-items:center;justify-content:center">${rightLogoC}</div>
+                      </div>
                       <div class="sub">${certDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س (م.2 تقديري)':'SAR (est. inv.2)'}</div>
                       <table>
-                        <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+                        <thead><tr>${headers.map((h: string)=>`<th>${h}</th>`).join('')}</tr></thead>
                         <tbody>${tableRows}</tbody>
-                        <tfoot><tr><td colspan="${headers.length-1}" style="text-align:right">${isAr?'إجمالي م.2 المتبقي (تقديري)':'Total est. inv.2'}</td><td style="text-align:left;direction:ltr">${totalVal}</td></tr></tfoot>
-                      </table></body></html>`;
+                        ${certFooter}
+                      </table>
+                      <script>window.addEventListener('load',function(){window.focus();window.print();});<\/script>
+                      </body></html>`;
                     const pw = window.open('', '_blank', 'width=1100,height=700');
-                    if (pw) { pw.document.write(html); pw.document.close(); pw.focus(); pw.print(); }
+                    if (pw) { pw.document.write(html); pw.document.close(); }
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 transition-colors"
                 >
@@ -2472,66 +2672,58 @@ export default function PeriodicKpiReport() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs border-collapse min-w-[900px]">
+                  <table className="w-full text-xs border-collapse min-w-[800px]">
                     <thead>
                       <tr className="bg-indigo-50 border-b border-indigo-200">
-                        {[
-                          lang === 'en' ? 'Work Order'   : 'أمر العمل',
-                          lang === 'en' ? 'District'     : 'الحي',
-                          lang === 'en' ? 'Region'       : 'المنطقة',
-                          lang === 'en' ? 'Sector'       : 'القطاع',
-                          lang === 'en' ? 'Inv. Type'    : 'نوع المستخلص',
-                          lang === 'en' ? '155 Date'     : 'تاريخ 155',
-                          lang === 'en' ? 'Inv.1 No.'    : 'رقم م.1',
-                          lang === 'en' ? 'Inv.1 Val.'   : 'قيمة م.1',
-                          lang === 'en' ? 'Billing'      : 'تاريخ فوترة م.1',
-                          lang === 'en' ? 'Inv.2 (Est.)' : 'م.2 (تقديري)',
-                          lang === 'en' ? 'Total (Est.)' : 'الإجمالي (تقديري)',
-                        ].map(h => (
-                          <th key={h} className="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-indigo-200">{h}</th>
+                        {certVisibleCols.map((col: { key: string; labelAr: string; labelEn: string; dataType?: string }) => (
+                          <th key={col.key} className={`px-3 py-2 font-semibold text-slate-600 whitespace-nowrap border-b border-indigo-200 ${ccIsNum(col) ? 'text-left' : 'text-right'}`}>
+                            {lang === 'en' ? col.labelEn : col.labelAr}
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {certDrawerRows.map((row: any, i: number) => (
                         <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
-                          <td className="px-3 py-2 font-medium text-indigo-700 whitespace-nowrap">{row.orderNumber ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.district ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.regionNameAr ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.sectorNameAr ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceType ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
-                            {row.proc155CloseDate ? new Date(row.proc155CloseDate).toLocaleDateString('en-CA') : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{row.invoiceNumber ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap text-left" dir="ltr">
-                            {row.invoice1 != null ? row.invoice1.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
-                            {row.invoiceBillingDate ? new Date(row.invoiceBillingDate).toLocaleDateString('en-CA') : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-indigo-600 whitespace-nowrap text-left font-medium" dir="ltr">
-                            {row.approxInvoice2 != null ? row.approxInvoice2.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-indigo-700 whitespace-nowrap text-left font-semibold" dir="ltr">
-                            {row.invoice1 != null ? (row.invoice1 * 2).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
-                          </td>
+                          {certVisibleCols.map((col: { key: string; labelAr: string; labelEn: string; dataType?: string }) => {
+                            const v = certGetVal(row, col.key);
+                            const isNum    = ccIsNum(col);
+                            const isDate   = ccIsDate(col);
+                            const isOrder  = col.key === 'orderNumber';
+                            const isApprox = col.key === 'approxInvoice2';
+                            const isTotal  = col.key === 'totalEst';
+                            return (
+                              <td
+                                key={col.key}
+                                className={`px-3 py-2 whitespace-nowrap ${isOrder ? 'font-medium text-indigo-700' : isTotal ? 'font-semibold text-indigo-700 text-left' : isApprox ? 'font-medium text-indigo-600 text-left' : isNum ? 'text-slate-700 text-left' : 'text-slate-600'}`}
+                                dir={isNum || isDate ? 'ltr' : undefined}
+                              >
+                                {ccFmtCell(v, col)}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot>
-                      <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
-                        <td colSpan={9} className="px-3 py-2 text-right text-slate-600">
-                          {lang === 'en' ? 'Total est. inv.2 (unbilled)' : 'إجمالي م.2 المتبقي (تقديري)'}
-                        </td>
-                        <td className="px-3 py-2 text-indigo-600 text-left" dir="ltr">
-                          {certDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="px-3 py-2 text-indigo-700 text-left" dir="ltr">
-                          {(certDrawerTotal * 2).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                        </td>
-                      </tr>
-                    </tfoot>
+                    {certVisibleCols.some((c: { key: string }) => c.key === 'approxInvoice2' || c.key === 'totalEst') && (() => {
+                      const approxIdx = certVisibleCols.findIndex((c: { key: string }) => c.key === 'approxInvoice2');
+                      const totalIdx  = certVisibleCols.findIndex((c: { key: string }) => c.key === 'totalEst');
+                      const labelIdx  = Math.max(approxIdx, totalIdx) - 1;
+                      return (
+                        <tfoot>
+                          <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-semibold">
+                            {certVisibleCols.map((col: { key: string }, i: number) => (
+                              <td key={col.key} className={`px-3 py-2 ${i === approxIdx ? 'text-indigo-600 text-left' : i === totalIdx ? 'text-indigo-700 text-left' : i === labelIdx ? 'text-right text-slate-600' : ''}`} dir={i === approxIdx || i === totalIdx ? 'ltr' : undefined}>
+                                {i === approxIdx ? certDrawerTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })
+                                  : i === totalIdx ? (certDrawerTotal * 2).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                                  : i === labelIdx ? (lang === 'en' ? 'Total (Est.)' : 'إجمالي م.2 المتبقي (تقديري)')
+                                  : ''}
+                              </td>
+                            ))}
+                          </tr>
+                        </tfoot>
+                      );
+                    })()}
                   </table>
                 </div>
               )}
@@ -2573,32 +2765,68 @@ export default function PeriodicKpiReport() {
                 {/* Excel export */}
                 <button
                   onClick={async () => {
+                    const isArCC = lang !== 'en';
                     const ExcelJS = (await import('exceljs')).default;
                     const wb = new ExcelJS.Workbook();
-                    const ws = wb.addWorksheet(lang === 'en' ? 'Completed Cert' : 'شهادات مكتملة');
-                    const headers = compCertVisibleCols.map(c => lang === 'en' ? c.labelEn : c.labelAr);
-                    ws.addRow(headers).font = { bold: true };
-                    compCertDrawerRows.forEach((r: any) => {
-                      ws.addRow(compCertVisibleCols.map(c => {
-                        const v = ccGetVal(r, c.key);
-                        if (ccIsDate(c)) return ccFmtDate(v);
-                        if (ccIsNum(c))  return v != null && v !== '' ? Number(v) : '';
-                        return v ?? '';
-                      }));
+                    const ws = wb.addWorksheet(isArCC ? 'شهادات مكتملة' : 'Completed Cert');
+                    ws.views = [{ rightToLeft: isArCC }];
+                    type CCCol = { key: string; labelAr: string; labelEn: string; dataType?: string };
+                    const ccHeaders = compCertVisibleCols.map((c: CCCol) => isArCC ? c.labelAr : c.labelEn);
+                    const ncCC = ccHeaders.length;
+                    const setCCC = (rowNum: number, val: string, bold: boolean, size: number, color: string) => {
+                      if (ncCC > 1) ws.mergeCells(rowNum, 1, rowNum, ncCC);
+                      const rowCC = ws.getRow(rowNum); rowCC.height = bold ? 28 : 16;
+                      const cellCC = rowCC.getCell(1); cellCC.value = val;
+                      cellCC.font = { bold, size, color: { argb: color } };
+                      cellCC.alignment = { horizontal: 'center', vertical: 'middle' };
+                    };
+                    const compNameCC = (isArCC ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                    let rpCC = 1;
+                    if (compNameCC) setCCC(rpCC++, compNameCC, true, 14, 'FF334155');
+                    setCCC(rpCC++, isArCC ? 'شهادات الإنجاز المكتملة' : 'Completed w/ Cert', true, 12, 'FF334155');
+                    setCCC(rpCC++, `${isArCC ? 'التاريخ:' : 'Date:'} ${new Date().toLocaleDateString(isArCC ? 'ar-SA' : 'en-CA')}`, false, 10, 'FF64748b');
+                    ws.getRow(rpCC++).height = 6;
+                    const HRCC = ws.getRow(rpCC); HRCC.height = 22;
+                    ccHeaders.forEach((h: string, i: number) => {
+                      const cellCC = HRCC.getCell(i + 1); cellCC.value = h;
+                      cellCC.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+                      cellCC.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+                      cellCC.alignment = { horizontal: 'center', vertical: 'middle' };
+                      cellCC.border = { top:{style:'thin',color:{argb:'FFFFFFFF'}}, left:{style:'thin',color:{argb:'FFFFFFFF'}}, bottom:{style:'thin',color:{argb:'FFFFFFFF'}}, right:{style:'thin',color:{argb:'FFFFFFFF'}} };
                     });
-                    ws.addRow([]);
+                    const dsCC = ++rpCC;
+                    const bdrCC = { style: 'thin' as const, color: { argb: 'FFcbd5e1' } };
+                    compCertDrawerRows.forEach((r: any, riCC: number) => {
+                      const rowCC = ws.getRow(dsCC + riCC); rowCC.height = 17;
+                      compCertVisibleCols.forEach((c: CCCol, ciCC: number) => {
+                        const v = ccGetVal(r, c.key);
+                        const cellCC = rowCC.getCell(ciCC + 1);
+                        cellCC.value = ccIsDate(c) ? ccFmtDate(v) : ccIsNum(c) ? (v != null && v !== '' ? Number(v) : '') : (v ?? '');
+                        cellCC.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: riCC % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
+                        cellCC.border = { top: bdrCC, left: bdrCC, bottom: bdrCC, right: bdrCC };
+                        cellCC.alignment = { horizontal: isArCC ? 'right' : 'left', vertical: 'middle' };
+                      });
+                    });
                     const totalColIdx = compCertVisibleCols.findIndex(c => c.key === 'totalInvoiced');
                     if (totalColIdx >= 0) {
-                      const totRow = ws.addRow(compCertVisibleCols.map((c, i) =>
-                        i === totalColIdx ? compCertDrawerTotal : (i === totalColIdx - 1 ? (lang === 'en' ? 'Total' : 'الإجمالي') : '')
-                      ));
-                      totRow.font = { bold: true };
+                      const tbdrCC = { style: 'medium' as const, color: { argb: 'FF334155' } };
+                      const totRowCC = ws.getRow(dsCC + compCertDrawerRows.length); totRowCC.height = 18;
+                      compCertVisibleCols.forEach((_c: CCCol, ciCC: number) => {
+                        const cellCC = totRowCC.getCell(ciCC + 1);
+                        cellCC.value = ciCC === totalColIdx ? compCertDrawerTotal : ciCC === totalColIdx - 1 ? (isArCC ? 'الإجمالي' : 'Total') : '';
+                        cellCC.font = { bold: true, color: { argb: 'FF334155' }, size: 11 };
+                        cellCC.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFe2e8f0' } };
+                        cellCC.alignment = { horizontal: isArCC ? 'right' : 'left', vertical: 'middle' };
+                        cellCC.border = { top: tbdrCC, left: bdrCC, bottom: bdrCC, right: bdrCC };
+                      });
                     }
+                    ws.columns = ccHeaders.map(() => ({ width: 18 }));
                     const buf = await wb.xlsx.writeBuffer();
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-                    a.download = `completed-cert-${Date.now()}.xlsx`;
-                    a.click();
+                    const a = Object.assign(document.createElement('a'), {
+                      href: URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })),
+                      download: `completed-cert-${Date.now()}.xlsx`,
+                    });
+                    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium hover:bg-emerald-100 transition-colors"
                 >
@@ -2621,30 +2849,44 @@ export default function PeriodicKpiReport() {
                     }).join('');
                     const totalColIdx = compCertVisibleCols.findIndex(c => c.key === 'totalInvoiced');
                     const footerRow = totalColIdx >= 0
-                      ? `<tfoot><tr>${compCertVisibleCols.map((_, i) => i < totalColIdx ? '<td></td>' : i === totalColIdx - 1 ? `<td style="text-align:right">${isAr?'الإجمالي':'Total'}</td>` : `<td style="text-align:left;direction:ltr">${totalVal}</td>`).join('')}</tr></tfoot>`
+                      ? `<tfoot><tr style="border-top:2px solid #334155">${compCertVisibleCols.map((_: any, i: number) => i < totalColIdx ? '<td></td>' : i === totalColIdx - 1 ? `<td style="text-align:right">${isAr?'الإجمالي':'Total'}</td>` : `<td style="text-align:left;direction:ltr">${totalVal}</td>`).join('')}</tr></tfoot>`
                       : '';
+                    const compNameP = (isAr ? reportHdr?.companyNameAr : reportHdr?.companyNameEn) ?? '';
+                    const lwP = reportHdr?.logoLeftWidthPdf ?? 120;
+                    const rwP = reportHdr?.logoRightWidthPdf ?? 120;
+                    const leftLogoP  = reportHdr?.logoLeftUrl  ? `<img src="${reportHdr.logoLeftUrl}"  style="width:${lwP}px;max-height:60px;object-fit:contain" />` : '';
+                    const rightLogoP = reportHdr?.logoRightUrl ? `<img src="${reportHdr.logoRightUrl}" style="width:${rwP}px;max-height:60px;object-fit:contain" />` : '';
                     const w = window.open('', '_blank');
                     if (!w) return;
-                    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8">
+                    w.document.write(`<!DOCTYPE html><html dir="${isAr?'rtl':'ltr'}"><head><meta charset="utf-8">
                       <title>${isAr ? 'شهادات الإنجاز المكتملة' : 'Completed w/ Cert'}</title>
                       <style>
-                        body{font-family:Arial,sans-serif;font-size:11px;direction:rtl}
-                        h2{font-size:14px;margin-bottom:4px} .sub{color:#666;margin-bottom:12px;font-size:11px}
+                        body{font-family:Arial,sans-serif;font-size:11px;direction:${isAr?'rtl':'ltr'};margin:0;padding:16px}
+                        .sub{color:#666;margin-bottom:12px;font-size:11px}
                         table{border-collapse:collapse;width:100%}
                         th,td{border:1px solid #ddd;padding:4px 7px;white-space:nowrap}
-                        th{background:#4f46e5;color:#fff;font-weight:bold}
-                        tfoot td{font-weight:bold;background:#eef2ff}
+                        th{background:#334155;color:#fff;font-weight:bold}
+                        tfoot td{font-weight:bold;background:#e2e8f0;color:#334155}
                         @page{size:landscape;margin:12mm}
                       </style></head><body>
-                      <h2>${isAr ? 'شهادات الإنجاز المكتملة — التفاصيل' : 'Completed w/ Cert — Detail'}</h2>
+                      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 8px;background:#f8fafc;border-bottom:3px solid #334155;margin-bottom:12px;">
+                        <div style="width:${lwP}px;display:flex;align-items:center;justify-content:center">${leftLogoP}</div>
+                        <div style="flex:1;text-align:center;padding:0 12px;direction:${isAr?'rtl':'ltr'}">
+                          ${compNameP?`<div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:4px">${compNameP}</div>`:''}
+                          <div style="font-size:11px;color:#334155">${isAr?'شهادات الإنجاز المكتملة':'Completed w/ Cert'}</div>
+                          <div style="font-size:10px;color:#64748b;margin-top:2px">${new Date().toLocaleDateString(isAr?'ar-SA':'en-CA')}</div>
+                        </div>
+                        <div style="width:${rwP}px;display:flex;align-items:center;justify-content:center">${rightLogoP}</div>
+                      </div>
                       <div class="sub">${compCertDrawerRows.length} ${isAr?'أمر':'orders'} · ~${totalVal} ${isAr?'ر.س':'SAR'}</div>
                       <table>
                         <thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
                         <tbody>${tableRows}</tbody>
                         ${footerRow}
-                      </table></body></html>`);
+                      </table>
+                      <script>window.addEventListener('load',function(){window.focus();window.print();});<\/script>
+                      </body></html>`);
                     w.document.close();
-                    w.print();
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-xs font-medium hover:bg-rose-100 transition-colors"
                 >
@@ -2739,6 +2981,30 @@ export default function PeriodicKpiReport() {
         />
       )}
 
+      {/* ── Column Picker Modal (مغلقة لم تُفوتر) ──────────────────────────── */}
+      {kpiPickerOpen && (
+        <ColumnPickerModal
+          tableKey="KPI_CLOSED"
+          availableCols={kpiAvailableCols}
+          selectedKeys={kpiColKeys}
+          onSave={(keys: string[]) => setKpiColKeys(keys)}
+          onClose={() => setKpiPickerOpen(false)}
+          maxCols={KPI_MAX_COLS}
+        />
+      )}
+
+      {/* ── Column Picker Modal (مفوتر ولم يصدر له شهادة إنجاز) ────────────── */}
+      {certPickerOpen && (
+        <ColumnPickerModal
+          tableKey="CERT_NO_CERT"
+          availableCols={certAvailableCols}
+          selectedKeys={certColKeys}
+          onSave={(keys: string[]) => setCertColKeys(keys)}
+          onClose={() => setCertPickerOpen(false)}
+          maxCols={CERT_MAX_COLS}
+        />
+      )}
+
       {/* ── Status Drawer ────────────────────────────────────────────────────── */}
       <KpiDrawer
         open={!!statusDrawer}
@@ -2775,6 +3041,7 @@ export default function PeriodicKpiReport() {
         colKeys={statusDrawerColKeys}
         onColKeysChange={setStatusDrawerColKeys}
         lang={lang}
+        reportHeader={reportHdr ?? undefined}
       />
 
       {/* ── Metric Drawer ────────────────────────────────────────────────────── */}
@@ -2791,6 +3058,7 @@ export default function PeriodicKpiReport() {
         colKeys={metricDrawerColKeys}
         onColKeysChange={setMetricDrawerColKeys}
         lang={lang}
+        reportHeader={reportHdr ?? undefined}
       />
 
       {/* ── Billing Drawer ───────────────────────────────────────────────────── */}
@@ -2807,6 +3075,7 @@ export default function PeriodicKpiReport() {
         colKeys={billingDrawerColKeys}
         onColKeysChange={setBillingDrawerColKeys}
         lang={lang}
+        reportHeader={reportHdr ?? undefined}
       />
 
     </div>

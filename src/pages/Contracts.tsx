@@ -36,7 +36,7 @@ const canManage = () => user().canManageContracts || user().role === 'ADMIN';
 
 function fmtDate(d?: string | null) {
   if (!d) return '—';
-  return new Date(d).toLocaleDateString('ar-SA-u-ca-gregory', { year: 'numeric', month: 'short', day: 'numeric' });
+  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function StatusBadge({ archivedAt, endDate }: { archivedAt?: string | null; endDate?: string }) {

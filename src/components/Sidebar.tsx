@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../services/api';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ClipboardList, Settings, LogOut,
@@ -16,10 +17,27 @@ export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
   );
+  const [sidebarLogoUrl, setSidebarLogoUrl] = useState('');
   const navigate = useNavigate();
   const { t, lang, toggleLang, isRtl } = useLang();
   const { theme, toggleTheme } = useTheme();
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+  // Load sidebar logo from report-header (accessible to all authenticated users)
+  useEffect(() => {
+    api.get('/admin/report-header').then(res => {
+      setSidebarLogoUrl(res.data?.sidebarLogoUrl ?? '');
+    }).catch(() => {});
+  }, []);
+
+  // Live update when admin uploads/removes sidebar logo from SystemSettings
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setSidebarLogoUrl((e as CustomEvent<{ url: string }>).detail.url);
+    };
+    window.addEventListener('sidebar-logo-changed', handler);
+    return () => window.removeEventListener('sidebar-logo-changed', handler);
+  }, []);
 
   // Close sidebar on mobile when screen becomes desktop
   useEffect(() => {
@@ -116,9 +134,17 @@ export default function Sidebar() {
               {/* Logo / Header */}
               <div className="p-5 border-b border-slate-100">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl flex-shrink-0">
-                    {lang === 'ar' ? 'ع' : 'U'}
-                  </div>
+                  {sidebarLogoUrl ? (
+                    <img
+                      src={sidebarLogoUrl}
+                      alt="logo"
+                      className="h-9 max-w-[120px] object-contain flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl flex-shrink-0">
+                      {lang === 'ar' ? 'ع' : 'U'}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <h2 className="font-bold text-slate-800 leading-tight truncate text-sm">{t('app.title')}</h2>
                     <p className="text-xs text-slate-500 truncate">{t('app.subtitle')}</p>
@@ -152,10 +178,10 @@ export default function Sidebar() {
                 {/* User info */}
                 <div className="flex items-center gap-3 px-4 py-3">
                   <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 font-semibold text-sm flex-shrink-0">
-                    {user.username?.[0]?.toUpperCase()}
+                    {(user.fullName || user.username)?.[0]?.toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-900 truncate">{user.username}</p>
+                    <p className="text-sm font-semibold text-slate-900 truncate">{user.fullName || user.username}</p>
                     <p className="text-xs text-slate-500 truncate">{user.role}</p>
                   </div>
                 </div>

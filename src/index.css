@@ -6,17 +6,17 @@
    Components keep existing class names; only palette values change.
 ═══════════════════════════════════════════════════════════════ */
 @theme {
-  /* Primary — Deep Navy (replaces indigo) */
-  --color-indigo-50:  #EEF2FF;
-  --color-indigo-100: #E0E7FF;
-  --color-indigo-200: #C7D2FE;
-  --color-indigo-300: #A5B4FC;
-  --color-indigo-400: #5B7FD4;
-  --color-indigo-500: #3D5FC0;
-  --color-indigo-600: #1F3A8A;
-  --color-indigo-700: #1A306F;
-  --color-indigo-800: #152659;
-  --color-indigo-900: #101C45;
+  /* Primary — Slate (replaces indigo) */
+  --color-indigo-50:  #F1F5F9;
+  --color-indigo-100: #E2E8F0;
+  --color-indigo-200: #CBD5E1;
+  --color-indigo-300: #94A3B8;
+  --color-indigo-400: #64748B;
+  --color-indigo-500: #475569;
+  --color-indigo-600: #334155;
+  --color-indigo-700: #1E293B;
+  --color-indigo-800: #0F172A;
+  --color-indigo-900: #020617;
 
   /* Background / Surface (slate override for app shell) */
   --color-slate-50:  #F6F7F9;
@@ -57,8 +57,8 @@
   --text:        #0F172A;
   --muted:       #64748B;
   --border:      #E2E8F0;
-  --primary:     #1F3A8A;
-  --primary-hover: #1A306F;
+  --primary:     #334155;
+  --primary-hover: #1E293B;
   --accent:      #D9A441;
   --accent-hover: #C8922F;
   --success:     #16A34A;
@@ -80,8 +80,8 @@ html.dark {
   --text:          #F1F5F9;
   --muted:         #94A3B8;
   --border:        #334155;
-  --primary:       #6B8DD6;
-  --primary-hover: #8AAAE8;
+  --primary:       #94A3B8;
+  --primary-hover: #CBD5E1;
   --shadow-card:   0 8px 24px rgba(0, 0, 0, 0.4);
 
   /* Override Tailwind slate tokens for all bg-slate-* / text-slate-* utilities */
@@ -97,11 +97,11 @@ html.dark {
   --color-slate-800: #F0F5FA;
   --color-slate-900: #F8FAFC;
 
-  /* Indigo adjustments for dark backgrounds */
-  --color-indigo-50:  #1E2D5E;
-  --color-indigo-100: #253578;
-  --color-indigo-600: #6B8DD6;
-  --color-indigo-700: #8AAAE8;
+  /* Slate adjustments for dark backgrounds */
+  --color-indigo-50:  #1E2A3A;
+  --color-indigo-100: #253044;
+  --color-indigo-600: #94A3B8;
+  --color-indigo-700: #CBD5E1;
 }
 
 /* Explicit fallback for bg-white (some browsers may not cascade CSS vars for literals) */

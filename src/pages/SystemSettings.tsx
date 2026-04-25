@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLang } from '../contexts/LangContext';
 import api from '../services/api';
-import { Settings, Upload, CheckCircle, AlertCircle, Loader2, Image, X, FileSpreadsheet, FileText } from 'lucide-react';
+import { Settings, Upload, CheckCircle, AlertCircle, Loader2, Image, X, FileSpreadsheet, FileText, LayoutDashboard } from 'lucide-react';
 
 const DEFAULT_W = 150;
 const MIN_W     = 40;
@@ -177,12 +177,16 @@ interface SettingsState {
   logo_left_width_excel:  number;
   logo_right_width_pdf:   number;
   logo_left_width_pdf:    number;
+  sidebar_logo_url:       string;
 }
+
+type SettingsTab = 'report-logos' | 'sidebar-logo';
 
 export default function SystemSettings() {
   const { lang } = useLang();
   const isRtl = lang === 'ar';
 
+  const [activeTab, setActiveTab]   = useState<SettingsTab>('report-logos');
   const [settings, setSettings]     = useState<SettingsState>({
     logo_right_url:         '',
     logo_left_url:          '',
@@ -190,15 +194,18 @@ export default function SystemSettings() {
     logo_left_width_excel:  DEFAULT_W,
     logo_right_width_pdf:   DEFAULT_W,
     logo_left_width_pdf:    DEFAULT_W,
+    sidebar_logo_url:       '',
   });
-  const [loading, setLoading]       = useState(true);
-  const [uploadingR, setUploadingR] = useState(false);
-  const [uploadingL, setUploadingL] = useState(false);
-  const [toast, setToast]           = useState<{ msg: string; ok: boolean } | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [uploadingR, setUploadingR]   = useState(false);
+  const [uploadingL, setUploadingL]   = useState(false);
+  const [uploadingS, setUploadingS]   = useState(false);
+  const [toast, setToast]             = useState<{ msg: string; ok: boolean } | null>(null);
 
-  const rightInputRef = useRef<HTMLInputElement>(null);
-  const leftInputRef  = useRef<HTMLInputElement>(null);
-  const saveTimers    = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const rightInputRef   = useRef<HTMLInputElement>(null);
+  const leftInputRef    = useRef<HTMLInputElement>(null);
+  const sidebarInputRef = useRef<HTMLInputElement>(null);
+  const saveTimers      = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -217,6 +224,7 @@ export default function SystemSettings() {
           logo_left_width_excel:  d.logo_left_width_excel   ? Number(d.logo_left_width_excel)  : DEFAULT_W,
           logo_right_width_pdf:   d.logo_right_width_pdf    ? Number(d.logo_right_width_pdf)   : DEFAULT_W,
           logo_left_width_pdf:    d.logo_left_width_pdf     ? Number(d.logo_left_width_pdf)    : DEFAULT_W,
+          sidebar_logo_url:       d.sidebar_logo_url        ?? '',
         });
       } catch {
         showToast(lang === 'ar' ? 'فشل تحميل الإعدادات' : 'Failed to load settings', false);
@@ -256,6 +264,37 @@ export default function SystemSettings() {
     }
   };
 
+  const handleSidebarLogoUpload = async (file: File) => {
+    setUploadingS(true);
+    try {
+      const form = new FormData();
+      form.append('logo', file);
+      const res = await api.post('/admin/upload-logo?side=sidebar', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const url: string = res.data.url;
+      setSettings(s => ({ ...s, sidebar_logo_url: url }));
+      window.dispatchEvent(new CustomEvent('sidebar-logo-changed', { detail: { url } }));
+      showToast(lang === 'ar' ? 'تم رفع الشعار بنجاح' : 'Logo uploaded successfully');
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || (lang === 'ar' ? 'فشل رفع الشعار' : 'Upload failed');
+      showToast(msg, false);
+    } finally {
+      setUploadingS(false);
+    }
+  };
+
+  const handleRemoveSidebarLogo = async () => {
+    try {
+      await api.put('/admin/system-settings/sidebar_logo_url', { value: '' });
+      setSettings(s => ({ ...s, sidebar_logo_url: '' }));
+      window.dispatchEvent(new CustomEvent('sidebar-logo-changed', { detail: { url: '' } }));
+      showToast(lang === 'ar' ? 'تم حذف الشعار' : 'Logo removed');
+    } catch {
+      showToast(lang === 'ar' ? 'فشل الحذف' : 'Remove failed', false);
+    }
+  };
+
   const handleRemoveLogo = async (side: 'right' | 'left') => {
     try {
       await api.put(`/admin/system-settings/logo_${side}_url`, { value: '' });
@@ -287,7 +326,7 @@ export default function SystemSettings() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8 space-y-8" dir={isRtl ? 'rtl' : 'ltr'}>
+    <div className="max-w-3xl mx-auto px-4 py-8 space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
 
       {toast && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 rounded-xl shadow-lg text-sm font-medium
@@ -307,85 +346,188 @@ export default function SystemSettings() {
           <h1 className="text-xl font-bold text-slate-800">
             {lang === 'ar' ? 'إعدادات النظام' : 'System Settings'}
           </h1>
-          <p className="text-sm text-slate-500">
-            {lang === 'ar' ? 'الشعارات التي تظهر في رأس التقارير' : 'Logos shown in the report header'}
-          </p>
         </div>
       </div>
 
-      <div className="space-y-3">
-        <h2 className="font-semibold text-slate-700 flex items-center gap-2">
-          <Image className="w-4 h-4 text-indigo-500" />
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200 gap-1">
+        <button
+          onClick={() => setActiveTab('report-logos')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'report-logos'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Image className="w-4 h-4" />
           {lang === 'ar' ? 'شعارات التقارير' : 'Report Logos'}
-        </h2>
-        <p className="text-sm text-slate-500">
-          {lang === 'ar'
-            ? 'حدّد العرض لكل شعار بشكل منفصل في Excel وPDF — المعاينة تعكس مقاس PDF.'
-            : 'Set width separately for Excel and PDF — preview reflects the PDF size.'}
-        </p>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <LogoCard
-            side="right"
-            label={lang === 'ar' ? 'الشعار الأيمن' : 'Right Logo'}
-            url={settings.logo_right_url}
-            widthExcel={settings.logo_right_width_excel}
-            widthPdf={settings.logo_right_width_pdf}
-            uploading={uploadingR}
-            inputRef={rightInputRef}
-            lang={lang}
-            onUpload={handleLogoUpload}
-            onRemove={handleRemoveLogo}
-            onWidthExcel={(side, w) => handleWidthChange(side, 'excel', w)}
-            onWidthPdf={(side, w)   => handleWidthChange(side, 'pdf',   w)}
-          />
-          <LogoCard
-            side="left"
-            label={lang === 'ar' ? 'الشعار الأيسر' : 'Left Logo'}
-            url={settings.logo_left_url}
-            widthExcel={settings.logo_left_width_excel}
-            widthPdf={settings.logo_left_width_pdf}
-            uploading={uploadingL}
-            inputRef={leftInputRef}
-            lang={lang}
-            onUpload={handleLogoUpload}
-            onRemove={handleRemoveLogo}
-            onWidthExcel={(side, w) => handleWidthChange(side, 'excel', w)}
-            onWidthPdf={(side, w)   => handleWidthChange(side, 'pdf',   w)}
-          />
-        </div>
+        </button>
+        <button
+          onClick={() => setActiveTab('sidebar-logo')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'sidebar-logo'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <LayoutDashboard className="w-4 h-4" />
+          {lang === 'ar' ? 'شعار النظام' : 'System Logo'}
+        </button>
       </div>
 
-      {/* Combined header preview — uses PDF widths */}
-      {(settings.logo_right_url || settings.logo_left_url) && (
-        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
-          <p className="text-xs text-indigo-600 font-medium mb-3 flex items-center gap-1.5">
-            <FileText className="w-3.5 h-3.5" />
-            {lang === 'ar' ? 'معاينة رأس التقرير (مقاسات PDF)' : 'Report Header Preview (PDF sizes)'}
+      {/* ── Tab: Report Logos ── */}
+      {activeTab === 'report-logos' && (
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">
+            {lang === 'ar'
+              ? 'حدّد العرض لكل شعار بشكل منفصل في Excel وPDF — المعاينة تعكس مقاس PDF.'
+              : 'Set width separately for Excel and PDF — preview reflects the PDF size.'}
           </p>
-          <div
-            className="bg-white rounded-lg border border-indigo-100 px-6 py-4 flex items-center justify-between gap-4"
-            dir="ltr"
-            style={{ minHeight: 80 }}
-            data-testid="preview-report-header"
-          >
-            <div style={{ flexShrink: 0 }}>
-              {settings.logo_left_url
-                ? <img src={settings.logo_left_url} alt="left" style={{ width: settings.logo_left_width_pdf, maxHeight: settings.logo_left_width_pdf, objectFit: 'contain' }} />
-                : <div style={{ width: settings.logo_left_width_pdf, height: Math.min(settings.logo_left_width_pdf, 60) }} className="bg-slate-100 rounded" />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <LogoCard
+              side="right"
+              label={lang === 'ar' ? 'الشعار الأيمن' : 'Right Logo'}
+              url={settings.logo_right_url}
+              widthExcel={settings.logo_right_width_excel}
+              widthPdf={settings.logo_right_width_pdf}
+              uploading={uploadingR}
+              inputRef={rightInputRef}
+              lang={lang}
+              onUpload={handleLogoUpload}
+              onRemove={handleRemoveLogo}
+              onWidthExcel={(side, w) => handleWidthChange(side, 'excel', w)}
+              onWidthPdf={(side, w)   => handleWidthChange(side, 'pdf',   w)}
+            />
+            <LogoCard
+              side="left"
+              label={lang === 'ar' ? 'الشعار الأيسر' : 'Left Logo'}
+              url={settings.logo_left_url}
+              widthExcel={settings.logo_left_width_excel}
+              widthPdf={settings.logo_left_width_pdf}
+              uploading={uploadingL}
+              inputRef={leftInputRef}
+              lang={lang}
+              onUpload={handleLogoUpload}
+              onRemove={handleRemoveLogo}
+              onWidthExcel={(side, w) => handleWidthChange(side, 'excel', w)}
+              onWidthPdf={(side, w)   => handleWidthChange(side, 'pdf',   w)}
+            />
+          </div>
+
+          {/* Combined header preview — uses PDF widths */}
+          {(settings.logo_right_url || settings.logo_left_url) && (
+            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+              <p className="text-xs text-indigo-600 font-medium mb-3 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" />
+                {lang === 'ar' ? 'معاينة رأس التقرير (مقاسات PDF)' : 'Report Header Preview (PDF sizes)'}
+              </p>
+              <div
+                className="bg-white rounded-lg border border-indigo-100 px-6 py-4 flex items-center justify-between gap-4"
+                dir="ltr"
+                style={{ minHeight: 80 }}
+                data-testid="preview-report-header"
+              >
+                <div style={{ flexShrink: 0 }}>
+                  {settings.logo_left_url
+                    ? <img src={settings.logo_left_url} alt="left" style={{ width: settings.logo_left_width_pdf, maxHeight: settings.logo_left_width_pdf, objectFit: 'contain' }} />
+                    : <div style={{ width: settings.logo_left_width_pdf, height: Math.min(settings.logo_left_width_pdf, 60) }} className="bg-slate-100 rounded" />
+                  }
+                </div>
+                <div className="flex-1 text-center space-y-1" dir={isRtl ? 'rtl' : 'ltr'}>
+                  <p className="text-xs text-slate-500">{lang === 'ar' ? 'المنطقة: ...' : 'Region: ...'}</p>
+                  <p className="text-xs text-slate-400">{lang === 'ar' ? 'مصدر التقرير: ...' : 'Report By: ...'}</p>
+                  <p className="text-xs text-slate-400">{lang === 'ar' ? 'التاريخ: ...' : 'Date: ...'}</p>
+                </div>
+                <div style={{ flexShrink: 0 }}>
+                  {settings.logo_right_url
+                    ? <img src={settings.logo_right_url} alt="right" style={{ width: settings.logo_right_width_pdf, maxHeight: settings.logo_right_width_pdf, objectFit: 'contain' }} />
+                    : <div style={{ width: settings.logo_right_width_pdf, height: Math.min(settings.logo_right_width_pdf, 60) }} className="bg-slate-100 rounded" />
+                  }
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Tab: Sidebar Logo ── */}
+      {activeTab === 'sidebar-logo' && (
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">
+            {lang === 'ar'
+              ? 'الشعار الذي يظهر في أعلى القائمة الجانبية للنظام.'
+              : 'The logo displayed at the top of the application sidebar.'}
+          </p>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-xs flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <LayoutDashboard className="w-4 h-4 text-indigo-500" />
+              <span className="font-semibold text-slate-700 text-sm">
+                {lang === 'ar' ? 'شعار القائمة الجانبية' : 'Sidebar Logo'}
+              </span>
+            </div>
+
+            {/* Preview */}
+            <div
+              className="border border-slate-200 rounded-xl bg-slate-50 flex items-center justify-center overflow-hidden"
+              style={{ minHeight: 80 }}
+              data-testid="preview-logo-sidebar"
+            >
+              {settings.sidebar_logo_url ? (
+                <img
+                  src={settings.sidebar_logo_url}
+                  alt="sidebar logo"
+                  style={{ maxHeight: 64, maxWidth: 160, objectFit: 'contain' }}
+                  data-testid="img-logo-sidebar"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-slate-300">
+                  <Image className="w-8 h-8" />
+                  <span className="text-xs">{lang === 'ar' ? 'لا يوجد شعار' : 'No logo'}</span>
+                </div>
+              )}
+            </div>
+
+            {settings.sidebar_logo_url && (
+              <button
+                onClick={handleRemoveSidebarLogo}
+                data-testid="btn-remove-logo-sidebar"
+                className="flex items-center justify-center gap-1.5 w-full py-2 px-4 text-sm text-red-500 border border-red-100 bg-red-50 rounded-xl hover:bg-red-100 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                {lang === 'ar' ? 'حذف الشعار' : 'Remove logo'}
+              </button>
+            )}
+
+            <input
+              ref={sidebarInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/svg+xml,image/webp"
+              className="hidden"
+              data-testid="input-logo-sidebar"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) handleSidebarLogoUpload(file);
+                e.target.value = '';
+              }}
+            />
+
+            <button
+              onClick={() => sidebarInputRef.current?.click()}
+              disabled={uploadingS}
+              data-testid="btn-upload-logo-sidebar"
+              className="flex items-center justify-center gap-2 w-full py-2.5 px-4 text-sm font-medium bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition-colors disabled:opacity-60"
+            >
+              {uploadingS
+                ? <><Loader2 className="w-4 h-4 animate-spin" />{lang === 'ar' ? 'جاري الرفع...' : 'Uploading...'}</>
+                : <><Upload className="w-4 h-4" />{lang === 'ar' ? 'رفع شعار' : 'Upload logo'}</>
               }
-            </div>
-            <div className="flex-1 text-center space-y-1" dir={isRtl ? 'rtl' : 'ltr'}>
-              <p className="text-xs text-slate-500">{lang === 'ar' ? 'المنطقة: ...' : 'Region: ...'}</p>
-              <p className="text-xs text-slate-400">{lang === 'ar' ? 'مصدر التقرير: ...' : 'Report By: ...'}</p>
-              <p className="text-xs text-slate-400">{lang === 'ar' ? 'التاريخ: ...' : 'Date: ...'}</p>
-            </div>
-            <div style={{ flexShrink: 0 }}>
-              {settings.logo_right_url
-                ? <img src={settings.logo_right_url} alt="right" style={{ width: settings.logo_right_width_pdf, maxHeight: settings.logo_right_width_pdf, objectFit: 'contain' }} />
-                : <div style={{ width: settings.logo_right_width_pdf, height: Math.min(settings.logo_right_width_pdf, 60) }} className="bg-slate-100 rounded" />
-              }
-            </div>
+            </button>
+
+            <p className="text-xs text-slate-400 text-center">
+              {lang === 'ar' ? 'PNG, JPG, SVG, WEBP — بحد أقصى 5 ميجابايت' : 'PNG, JPG, SVG, WEBP — max 5 MB'}
+            </p>
           </div>
         </div>
       )}

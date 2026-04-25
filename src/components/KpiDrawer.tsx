@@ -11,6 +11,17 @@ export interface KpiCol {
   virtual?: boolean;
 }
 
+export interface ReportHeader {
+  logoRightUrl:        string | null;
+  logoLeftUrl:         string | null;
+  companyNameAr:       string | null;
+  companyNameEn:       string | null;
+  logoRightWidthExcel: number;
+  logoLeftWidthExcel:  number;
+  logoRightWidthPdf:   number;
+  logoLeftWidthPdf:    number;
+}
+
 export interface KpiDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -33,6 +44,8 @@ export interface KpiDrawerProps {
   totalValue?: number;
   /** Custom cell renderer — return null to fall back to default */
   renderCell?: (row: any, col: KpiCol) => React.ReactNode | null;
+  /** Company branding for PDF/Excel exports */
+  reportHeader?: ReportHeader;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -192,6 +205,7 @@ export default function KpiDrawer({
   lang,
   totalKey, totalLabel = 'الإجمالي', totalLabelEn = 'Total', totalValue,
   renderCell,
+  reportHeader,
 }: KpiDrawerProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const isAr = lang !== 'en';
@@ -216,35 +230,98 @@ export default function KpiDrawer({
     const wb = new ExcelJS.Workbook();
     const sheetName = (isAr ? title : (titleEn ?? title)).slice(0, 31);
     const ws = wb.addWorksheet(sheetName);
-    ws.addRow(visibleCols.map(c => isAr ? c.labelAr : c.labelEn)).font = { bold: true };
-    rows.forEach(r => {
-      ws.addRow(visibleCols.map(c => {
-        const v = getVal(r, c.key);
-        if (isDateCol(c)) return fmtDate(v);
-        if (isNumCol(c))  return v != null && v !== '' ? Number(v) : '';
-        return v ?? '';
-      }));
+    ws.views = [{ rightToLeft: isAr }];
+    const nc = visibleCols.length;
+
+    const setCenter = (rowNum: number, val: string, bold: boolean, size: number, color: string) => {
+      if (nc > 1) ws.mergeCells(rowNum, 1, rowNum, nc);
+      const row = ws.getRow(rowNum);
+      row.height = bold ? 28 : 16;
+      const cell = row.getCell(1);
+      cell.value = val;
+      cell.font = { bold, size, color: { argb: color } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    };
+
+    const companyName = (isAr ? reportHeader?.companyNameAr : reportHeader?.companyNameEn) ?? '';
+    const displayTitle = isAr ? title : (titleEn ?? title);
+    let rowPtr = 1;
+    if (companyName) setCenter(rowPtr++, companyName, true, 14, 'FF334155');
+    setCenter(rowPtr++, displayTitle, true, 12, 'FF334155');
+    setCenter(rowPtr++, `${isAr ? 'التاريخ:' : 'Date:'} ${new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-CA')}`, false, 10, 'FF64748b');
+    ws.getRow(rowPtr++).height = 6;
+
+    const HR = ws.getRow(rowPtr);
+    HR.height = 22;
+    visibleCols.forEach((col, i) => {
+      const cell = HR.getCell(i + 1);
+      cell.value = isAr ? col.labelAr : col.labelEn;
+      cell.font  = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+      cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top:    { style: 'thin', color: { argb: 'FFFFFFFF' } },
+        left:   { style: 'thin', color: { argb: 'FFFFFFFF' } },
+        bottom: { style: 'thin', color: { argb: 'FFFFFFFF' } },
+        right:  { style: 'thin', color: { argb: 'FFFFFFFF' } },
+      };
     });
+    const dataStartRow = ++rowPtr;
+
+    const bdrStyle: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FFcbd5e1' } };
+    const allBdr = { top: bdrStyle, left: bdrStyle, bottom: bdrStyle, right: bdrStyle };
+    rows.forEach((r, ri) => {
+      const row = ws.getRow(dataStartRow + ri);
+      row.height = 17;
+      visibleCols.forEach((col, ci) => {
+        const cell = row.getCell(ci + 1);
+        const v = getVal(r, col.key);
+        if (isDateCol(col)) cell.value = fmtDate(v);
+        else if (isNumCol(col)) cell.value = v != null && v !== '' ? Number(v) : '';
+        else cell.value = v ?? '';
+        cell.alignment = { horizontal: isAr ? 'right' : 'left', vertical: 'middle' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ri % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
+        cell.border = allBdr as ExcelJS.Borders;
+      });
+    });
+
     if (totalColVisible && totalKey) {
       const totalColIdx = visibleCols.findIndex(c => c.key === totalKey);
       if (totalColIdx >= 0) {
-        ws.addRow([]);
-        const totRow = ws.addRow(visibleCols.map((_, i) =>
-          i === totalColIdx
-            ? computedTotal
-            : (i === totalColIdx - 1 ? (isAr ? totalLabel : totalLabelEn) : '')
-        ));
-        totRow.font = { bold: true };
+        const totalsBdr: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: 'FF334155' } };
+        const totalsRow = ws.getRow(dataStartRow + rows.length);
+        totalsRow.height = 18;
+        visibleCols.forEach((_col, ci) => {
+          const cell = totalsRow.getCell(ci + 1);
+          if (ci === totalColIdx) cell.value = computedTotal;
+          else if (ci === totalColIdx - 1) cell.value = isAr ? totalLabel : totalLabelEn;
+          else cell.value = '';
+          cell.font = { bold: true, color: { argb: 'FF334155' }, size: 11 };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFe2e8f0' } };
+          cell.alignment = { horizontal: isAr ? 'right' : 'left', vertical: 'middle' };
+          cell.border = {
+            top:    totalsBdr as ExcelJS.Border,
+            left:   bdrStyle  as ExcelJS.Border,
+            bottom: bdrStyle  as ExcelJS.Border,
+            right:  bdrStyle  as ExcelJS.Border,
+          };
+        });
       }
     }
+
+    ws.columns = visibleCols.map(col => {
+      const lbl = isAr ? col.labelAr : col.labelEn;
+      return { width: Math.min(Math.max(lbl.length + 4, 12), 42) };
+    });
+
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${isAr ? title : (titleEn ?? title)}.xlsx`;
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(blob),
+      download: `${isAr ? title : (titleEn ?? title)}.xlsx`,
+    });
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   };
 
   const handlePdf = () => {
@@ -262,7 +339,7 @@ export default function KpiDrawer({
     if (totalColVisible && totalKey) {
       const totalColIdx = visibleCols.findIndex(c => c.key === totalKey);
       if (totalColIdx >= 0) {
-        footerRow = `<tfoot><tr>${visibleCols.map((_, i) =>
+        footerRow = `<tfoot><tr style="border-top:2px solid #334155">${visibleCols.map((_: KpiCol, i: number) =>
           i < totalColIdx - 1
             ? '<td></td>'
             : i === totalColIdx - 1
@@ -273,28 +350,44 @@ export default function KpiDrawer({
     }
 
     const displayTitle = isAr ? title : (titleEn ?? title);
+    const hdr = reportHeader;
+    const companyName = (isAr ? hdr?.companyNameAr : hdr?.companyNameEn) ?? '';
+    const lw = hdr?.logoLeftWidthPdf ?? 120;
+    const rw = hdr?.logoRightWidthPdf ?? 120;
+    const leftLogo  = hdr?.logoLeftUrl  ? `<img src="${hdr.logoLeftUrl}"  style="width:${lw}px;max-height:60px;object-fit:contain" />` : '';
+    const rightLogo = hdr?.logoRightUrl ? `<img src="${hdr.logoRightUrl}" style="width:${rw}px;max-height:60px;object-fit:contain" />` : '';
+
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(`<!DOCTYPE html><html dir="${isAr ? 'rtl' : 'ltr'}"><head><meta charset="utf-8">
       <title>${displayTitle}</title>
       <style>
-        body{font-family:Arial,sans-serif;font-size:11px;direction:${isAr ? 'rtl' : 'ltr'}}
-        h2{font-size:14px;margin-bottom:4px}.sub{color:#666;margin-bottom:12px;font-size:11px}
+        body{font-family:Arial,sans-serif;font-size:11px;direction:${isAr ? 'rtl' : 'ltr'};margin:0;padding:16px}
+        .sub{color:#666;margin-bottom:12px;font-size:11px}
         table{border-collapse:collapse;width:100%}
         th,td{border:1px solid #ddd;padding:4px 7px;white-space:nowrap}
-        th{background:#4f46e5;color:#fff;font-weight:bold}
-        tfoot td{font-weight:bold;background:#eef2ff}
+        th{background:#334155;color:#fff;font-weight:bold}
+        tfoot td{font-weight:bold;background:#e2e8f0;color:#334155}
         @page{size:landscape;margin:12mm}
       </style></head><body>
-      <h2>${displayTitle}</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 8px;background:#f8fafc;border-bottom:3px solid #334155;margin-bottom:12px;">
+        <div style="width:${lw}px;display:flex;align-items:center;justify-content:center">${leftLogo}</div>
+        <div style="flex:1;text-align:center;padding:0 12px;direction:${isAr ? 'rtl' : 'ltr'}">
+          ${companyName ? `<div style="font-size:13px;font-weight:bold;color:#334155;margin-bottom:4px">${companyName}</div>` : ''}
+          <div style="font-size:11px;color:#334155">${displayTitle}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">${new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-CA')}</div>
+        </div>
+        <div style="width:${rw}px;display:flex;align-items:center;justify-content:center">${rightLogo}</div>
+      </div>
       <div class="sub">${rows.length} ${isAr ? 'أمر' : 'orders'}</div>
       <table>
         <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
         <tbody>${tableRows}</tbody>
         ${footerRow}
-      </table></body></html>`);
+      </table>
+      <script>window.addEventListener('load',function(){window.focus();window.print();});<\/script>
+      </body></html>`);
     w.document.close();
-    w.print();
   };
 
   if (!open) return null;

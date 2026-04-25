@@ -21,8 +21,12 @@ import {
   Building2,
   MapPin,
   Layers,
-  Info,
-  Scale
+  Scale,
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Loader2
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -43,6 +47,7 @@ import {
   LabelList
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
+import { exportReport } from '../utils/reportExporter';
 
 const COLORS = {
   navy:    '#1E3A5F',
@@ -132,7 +137,7 @@ function MetricRow({ label, value, sub, target, colors, barPct, tooltip }: {
   colors: { dot: string; text: string; bg: string }; barPct: number | null;
   tooltip?: string;
 }) {
-  const barColor = '#1F3A8A';
+  const barColor = '#334155';
   const pct = Math.min(100, barPct ?? 0);
   return (
     <div>
@@ -368,6 +373,13 @@ export default function DashboardExecutive() {
   const [targetsSaveError, setTargetsSaveError] = useState<string | null>(null);
   const [targetsYear, setTargetsYear] = useState(currentYear);
 
+  // Financial card drill-down
+  const [activeFinCard, setActiveFinCard] = useState<'estimated'|'invoiced'|'remaining'|'gap'|null>(null);
+  const [detailPage, setDetailPage]       = useState(1);
+  const [detailData, setDetailData]       = useState<any>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [exportingDetail, setExportingDetail] = useState<'excel' | 'pdf' | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -421,6 +433,108 @@ export default function DashboardExecutive() {
       })));
     } catch {}
   }, [currentYear]);
+
+  const fetchDetail = useCallback(async (card: string, page: number) => {
+    setDetailLoading(true);
+    try {
+      const params = new URLSearchParams({ card, page: String(page), limit: '20' });
+      if (filters.sectors.length > 0)  params.append('sectors',    filters.sectors.join(','));
+      if (filters.regionIds.length > 0) params.append('regionIds',  filters.regionIds.join(','));
+      if (filters.projectType)          params.append('projectType', filters.projectType);
+      const res = await api.get(`/dashboard/executive/financial-detail?${params.toString()}`);
+      setDetailData(res.data);
+    } catch { setDetailData(null); }
+    finally   { setDetailLoading(false); }
+  }, [filters]);
+
+  const exportDetail = useCallback(async (format: 'excel' | 'pdf') => {
+    if (!activeFinCard) return;
+    setExportingDetail(format);
+    try {
+      const allRows: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+      let cardTotal: number | null = null;
+
+      do {
+        const params = new URLSearchParams({ card: activeFinCard, page: String(page), limit: '100' });
+        if (filters.sectors.length > 0)   params.append('sectors',     filters.sectors.join(','));
+        if (filters.regionIds.length > 0)  params.append('regionIds',   filters.regionIds.join(','));
+        if (filters.projectType)           params.append('projectType', filters.projectType);
+        const res = await api.get(`/dashboard/executive/financial-detail?${params.toString()}`);
+        if (page === 1) cardTotal = res.data.cardTotal ?? null;
+        allRows.push(...res.data.rows);
+        totalPages = res.data.pagination.totalPages;
+        page++;
+      } while (page <= totalPages);
+
+      const cols = DETAIL_COLS[activeFinCard];
+      const cardLabel = lang === 'en' ? CARD_LABELS[activeFinCard].en : CARD_LABELS[activeFinCard].ar;
+      const dateTag   = new Date().toISOString().split('T')[0];
+      const filename  = lang === 'en'
+        ? `Executive_${CARD_LABELS[activeFinCard].en.replace(/\s+/g, '_')}_${dateTag}.${format === 'pdf' ? 'pdf' : 'xlsx'}`
+        : `تنفيذي_${CARD_LABELS[activeFinCard].ar}_${dateTag}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
+
+      // Pre-format values to match table display
+      const exportData = allRows.map(row => {
+        const out: Record<string, string> = {};
+        cols.forEach(col => {
+          const val = row[col.key];
+          if (val == null) {
+            out[col.key] = '—';
+          } else if (col.pct) {
+            out[col.key] = Number(val).toFixed(1) + '%';
+          } else if (col.numeric) {
+            out[col.key] = Number(val).toLocaleString('en-US', { maximumFractionDigits: 0 });
+          } else {
+            out[col.key] = String(val);
+          }
+        });
+        return out;
+      });
+
+      // Columns: derive alignment from numeric/pct flags
+      const exportColumns = cols.map(col => ({
+        key:     col.key,
+        labelAr: col.labelAr,
+        labelEn: col.labelEn,
+        align:   (col.numeric || col.pct) ? 'center' as const : 'right' as const,
+      }));
+
+      // Totals row: highlight numeric column only (not pct)
+      const totals: Record<string, number> = {};
+      if (cardTotal != null) {
+        const highlightCol = cols.find(c => c.highlight && c.numeric);
+        if (highlightCol) totals[highlightCol.key] = Math.round(cardTotal);
+      }
+
+      const username = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').username as string | undefined; } catch { return undefined; } })();
+
+      await exportReport({
+        data:       exportData,
+        columns:    exportColumns,
+        lang:       lang as 'ar' | 'en',
+        format,
+        filename,
+        sheetTitle: cardLabel,
+        totals:     Object.keys(totals).length > 0 ? totals : undefined,
+        username,
+      });
+    } catch (e) {
+      console.error('[exportDetail]', e);
+    } finally {
+      setExportingDetail(null);
+    }
+  }, [activeFinCard, filters, lang]);
+
+  // Fetch detail whenever card / page / filters change
+  useEffect(() => {
+    if (!activeFinCard) { setDetailData(null); return; }
+    fetchDetail(activeFinCard, detailPage);
+  }, [activeFinCard, detailPage, fetchDetail]);
+
+  // Reset to page 1 when the active card changes
+  useEffect(() => { setDetailPage(1); }, [activeFinCard]);
 
   const saveSectorTargets = async () => {
     setTargetsSaving(true);
@@ -780,6 +894,8 @@ export default function DashboardExecutive() {
           value={formatCurrency(data?.financial?.estimated)}
           icon={DollarSign}
           loading={loading}
+          active={activeFinCard === 'estimated'}
+          onClick={() => !loading && setActiveFinCard(activeFinCard === 'estimated' ? null : 'estimated')}
           tooltip={lang === 'en'
             ? 'Total expected value of all work orders in the selected period. Represents the baseline for comparison.'
             : 'إجمالي القيمة المتوقعة لجميع أوامر العمل ضمن الفترة المحددة. تمثل خط الأساس للمقارنة.'}
@@ -789,6 +905,8 @@ export default function DashboardExecutive() {
           value={formatCurrency(data?.financial?.invoiced)}
           icon={ClipboardList}
           loading={loading}
+          active={activeFinCard === 'invoiced'}
+          onClick={() => !loading && setActiveFinCard(activeFinCard === 'invoiced' ? null : 'invoiced')}
           pct={data?.financial?.estimated ? (data.financial.invoiced / data.financial.estimated) * 100 : null}
           tooltip={lang === 'en'
             ? 'Total invoiced so far (Invoice 1 + Invoice 2) across all work orders.'
@@ -799,6 +917,8 @@ export default function DashboardExecutive() {
           value={formatCurrency(data?.financial?.expectedRemaining)}
           icon={Clock}
           loading={loading}
+          active={activeFinCard === 'remaining'}
+          onClick={() => !loading && setActiveFinCard(activeFinCard === 'remaining' ? null : 'remaining')}
           tooltip={lang === 'en'
             ? 'Approximate remaining amount to be invoiced based on current work order status. For partial orders, Invoice 2 is assumed ≈ Invoice 1 when only Invoice 1 exists. For final orders, the estimate is used when no invoice exists.'
             : 'تقدير تقريبي للمبلغ المتبقي فوترته بناءً على حالة أوامر العمل الحالية. في الأعمال الجزئية قد يُفترض أن المستخلص الثاني قريب من الأول، أما في الأعمال النهائية فيُستخدم التقدير عند عدم وجود فاتورة.'}
@@ -811,11 +931,192 @@ export default function DashboardExecutive() {
             : null}
           icon={Scale}
           loading={loading}
+          active={activeFinCard === 'gap'}
+          onClick={() => !loading && setActiveFinCard(activeFinCard === 'gap' ? null : 'gap')}
           tooltip={lang === 'en'
             ? 'Actual difference between estimated and total invoiced for fully-invoiced orders only. Partial: both invoices exist. Final: invoice 1 exists. Shown as value and percentage.'
             : 'الفرق الفعلي بين القيمة التقديرية وإجمالي المفوتر للأوامر المكتملة فوترة فقط. يُحسب فقط بعد اكتمال الفوترة (جزئي: مستخلصين، نهائي: مستخلص واحد)، ويُعرض كقيمة ونسبة.'}
         />
       </div>
+
+      {/* ── Financial Drill-down Detail ── */}
+      <AnimatePresence>
+        {activeFinCard && (
+          <motion.div
+            key="fin-detail"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18 }}
+            className="px-6 pt-3"
+          >
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-3 bg-slate-50 border-b border-slate-100 flex-wrap gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-bold text-slate-800">
+                    {lang === 'en' ? CARD_LABELS[activeFinCard].en : CARD_LABELS[activeFinCard].ar}
+                  </span>
+                  {detailData && (
+                    <span className="text-xs text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                      {lang === 'en'
+                        ? `${detailData.pagination.total} orders`
+                        : `${detailData.pagination.total} أمر`}
+                    </span>
+                  )}
+                  {detailData && (
+                    <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full tabular-nums">
+                      {formatCurrency(detailData.cardTotal)}
+                    </span>
+                  )}
+                  {detailLoading && (
+                    <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {detailData && !detailLoading && (
+                    <>
+                      <button
+                        onClick={() => exportDetail('excel')}
+                        disabled={exportingDetail !== null}
+                        className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                      >
+                        {exportingDetail === 'excel'
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <Download className="w-3.5 h-3.5" />}
+                        Excel
+                      </button>
+                      <button
+                        onClick={() => exportDetail('pdf')}
+                        disabled={exportingDetail !== null}
+                        className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
+                      >
+                        {exportingDetail === 'pdf'
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <Download className="w-3.5 h-3.5" />}
+                        PDF
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => { setActiveFinCard(null); setDetailData(null); }}
+                    className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center hover:bg-slate-300 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5 text-slate-600" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                {detailLoading && !detailData ? (
+                  <div className="flex items-center justify-center py-14">
+                    <RefreshCw className="w-6 h-6 text-slate-300 animate-spin" />
+                  </div>
+                ) : detailData?.rows?.length > 0 ? (
+                  <table className="w-full text-xs" dir={isRtl ? 'rtl' : 'ltr'}>
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-100">
+                        {DETAIL_COLS[activeFinCard].map((col: ColDef) => (
+                          <th key={col.key}
+                            className={`px-3 py-2.5 font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap ${col.numeric || col.pct ? 'text-center' : 'text-right'}`}>
+                            {lang === 'en' ? col.labelEn : col.labelAr}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {detailData.rows.map((row: any, idx: number) => (
+                        <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
+                          {DETAIL_COLS[activeFinCard].map((col: ColDef) => {
+                            const val = row[col.key];
+                            return (
+                              <td key={col.key}
+                                className={`px-3 py-2.5 whitespace-nowrap ${col.numeric || col.pct ? 'tabular-nums text-center' : 'text-right'}`}>
+                                {col.link ? (
+                                  <a
+                                    href={`/work-orders/${row.id}/edit`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-bold text-indigo-600 hover:text-indigo-800 hover:underline inline-flex items-center gap-1"
+                                  >
+                                    {val || '-'}
+                                    <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                                  </a>
+                                ) : col.pct ? (
+                                  <span className={`font-bold ${val >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {val != null ? val.toFixed(1) + '%' : '-'}
+                                  </span>
+                                ) : col.numeric ? (
+                                  <span className={col.highlight
+                                    ? (val >= 0 ? 'text-emerald-600 font-bold' : 'text-red-600 font-bold')
+                                    : 'text-slate-700'}>
+                                    {val != null ? Number(val).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-'}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-700">{val || '-'}</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="py-12 text-center text-slate-400 text-sm">
+                    {lang === 'en' ? 'No data available' : 'لا توجد بيانات'}
+                  </div>
+                )}
+              </div>
+
+              {/* Pagination */}
+              {detailData && detailData.pagination.totalPages > 1 && (
+                <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50 flex-wrap gap-2">
+                  <span className="text-xs text-slate-500">
+                    {lang === 'en'
+                      ? `Page ${detailData.pagination.page} of ${detailData.pagination.totalPages} · ${detailData.pagination.total} total`
+                      : `صفحة ${detailData.pagination.page} من ${detailData.pagination.totalPages} · ${detailData.pagination.total} أمر`}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setDetailPage(Math.max(1, detailPage - 1))}
+                      disabled={detailPage === 1}
+                      className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isRtl ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                    </button>
+                    {(() => {
+                      const total   = detailData.pagination.totalPages;
+                      const current = detailPage;
+                      const start   = Math.max(1, Math.min(current - 2, total - 4));
+                      const end     = Math.min(total, start + 4);
+                      return Array.from({ length: end - start + 1 }, (_, i) => start + i).map(pg => (
+                        <button key={pg} onClick={() => setDetailPage(pg)}
+                          className={`w-7 h-7 rounded-lg text-xs font-bold transition-colors ${
+                            pg === current
+                              ? 'bg-slate-700 text-white'
+                              : 'border border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >{pg}</button>
+                      ));
+                    })()}
+                    <button
+                      onClick={() => setDetailPage(Math.min(detailData.pagination.totalPages, detailPage + 1))}
+                      disabled={detailPage === detailData.pagination.totalPages}
+                      className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isRtl ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── أداء القطاعات ── */}
       <div className="px-6 pt-4">
@@ -1404,15 +1705,70 @@ function KpiSummaryBar({ kpis, loading, lang }: any) {
   );
 }
 
-/* ── Finance card — theme color only ── */
-const THEME = '#1F3A8A';
+/* ── Column definitions for financial drill-down ── */
+type ColDef = { key: string; labelAr: string; labelEn: string; numeric?: boolean; link?: boolean; pct?: boolean; highlight?: boolean };
+const DETAIL_COLS: Record<string, ColDef[]> = {
+  estimated: [
+    { key: 'orderNumber',   labelAr: 'رقم الأمر',       labelEn: 'Order #',      link: true },
+    { key: 'client',        labelAr: 'العميل',           labelEn: 'Client' },
+    { key: 'workType',      labelAr: 'نوع العمل',        labelEn: 'Work Type' },
+    { key: 'projectType',   labelAr: 'نوع المشروع',      labelEn: 'Project Type' },
+    { key: 'sectorNameAr',  labelAr: 'القطاع',           labelEn: 'Sector' },
+    { key: 'regionNameAr',  labelAr: 'المنطقة',          labelEn: 'Region' },
+    { key: 'stageNameAr',   labelAr: 'المرحلة',          labelEn: 'Stage' },
+    { key: 'estimatedValue',labelAr: 'القيمة التقديرية', labelEn: 'Estimated',    numeric: true },
+  ],
+  invoiced: [
+    { key: 'orderNumber',     labelAr: 'رقم الأمر',   labelEn: 'Order #',     link: true },
+    { key: 'client',          labelAr: 'العميل',       labelEn: 'Client' },
+    { key: 'sectorNameAr',    labelAr: 'القطاع',       labelEn: 'Sector' },
+    { key: 'regionNameAr',    labelAr: 'المنطقة',      labelEn: 'Region' },
+    { key: 'invoiceType',     labelAr: 'نوع الفاتورة', labelEn: 'Type' },
+    { key: 'invoice1',        labelAr: 'مستخلص 1',     labelEn: 'Invoice 1',   numeric: true },
+    { key: 'invoice2',        labelAr: 'مستخلص 2',     labelEn: 'Invoice 2',   numeric: true },
+    { key: 'collectedAmount', labelAr: 'المحصّل',      labelEn: 'Collected',   numeric: true, highlight: true },
+  ],
+  remaining: [
+    { key: 'orderNumber',      labelAr: 'رقم الأمر',       labelEn: 'Order #',      link: true },
+    { key: 'client',           labelAr: 'العميل',           labelEn: 'Client' },
+    { key: 'sectorNameAr',     labelAr: 'القطاع',           labelEn: 'Sector' },
+    { key: 'regionNameAr',     labelAr: 'المنطقة',          labelEn: 'Region' },
+    { key: 'invoiceType',      labelAr: 'نوع الفاتورة',     labelEn: 'Type' },
+    { key: 'invoice1',         labelAr: 'مستخلص 1',         labelEn: 'Invoice 1',    numeric: true },
+    { key: 'invoice2',         labelAr: 'مستخلص 2',         labelEn: 'Invoice 2',    numeric: true },
+    { key: 'expectedRemaining',labelAr: 'المتبقي المتوقع',  labelEn: 'Exp. Rem.',    numeric: true, highlight: true },
+  ],
+  gap: [
+    { key: 'orderNumber',   labelAr: 'رقم الأمر',         labelEn: 'Order #',         link: true },
+    { key: 'client',        labelAr: 'العميل',             labelEn: 'Client' },
+    { key: 'sectorNameAr',  labelAr: 'القطاع',             labelEn: 'Sector' },
+    { key: 'regionNameAr',  labelAr: 'المنطقة',            labelEn: 'Region' },
+    { key: 'invoiceType',   labelAr: 'نوع الفاتورة',       labelEn: 'Type' },
+    { key: 'estimatedValue',labelAr: 'التقديري',           labelEn: 'Estimated',       numeric: true },
+    { key: 'totalInvoiced', labelAr: 'إجمالي الفواتير',    labelEn: 'Total Invoiced',  numeric: true },
+    { key: 'diffValue',     labelAr: 'الفرق (ر.س)',        labelEn: 'Gap (SAR)',        numeric: true, highlight: true },
+    { key: 'diffPct',       labelAr: 'الفرق (%)',          labelEn: 'Gap (%)',          pct: true,     highlight: true },
+  ],
+};
+const CARD_LABELS: Record<string, { ar: string; en: string }> = {
+  estimated: { ar: 'القيمة التقديرية',       en: 'Estimated Value' },
+  invoiced:  { ar: 'إجمالي المفوتر',         en: 'Total Invoiced' },
+  remaining: { ar: 'المتبقي المتوقع',        en: 'Expected Remaining' },
+  gap:       { ar: 'الفرق للمفوتر المكتمل', en: 'Completed Invoicing Gap' },
+};
 
-function FinanceCard({ label, value, icon: Icon, loading, pct, tooltip, subValue }: any) {
+/* ── Finance card — theme color only ── */
+const THEME = '#334155';
+
+function FinanceCard({ label, value, icon: Icon, loading, pct, tooltip, subValue, onClick, active }: any) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden"
+      onClick={onClick}
+      className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
+        onClick ? 'cursor-pointer hover:shadow-md' : ''
+      } ${active ? 'border-slate-400 ring-2 ring-slate-300 ring-offset-1' : 'border-slate-200'}`}
     >
       <div className="h-1.5" style={{ background: THEME }} />
       <div className="p-4">
@@ -1427,16 +1783,9 @@ function FinanceCard({ label, value, icon: Icon, loading, pct, tooltip, subValue
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="flex items-center gap-1 min-w-0">
                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">{label}</div>
-                {tooltip && (
-                  <div className="relative group flex-shrink-0">
-                    <Info className="w-3 h-3 text-slate-300 cursor-help" />
-                    <div className="absolute bottom-full right-0 mb-1 w-60 bg-slate-800 text-white text-[10px] rounded-lg p-2 opacity-0 group-hover:opacity-100 transition-opacity z-50 leading-relaxed pointer-events-none shadow-xl whitespace-normal">
-                      {tooltip}
-                    </div>
-                  </div>
-                )}
+                {tooltip && <InfoBadge text={tooltip} />}
               </div>
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: '#EEF2FF' }}>
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 bg-indigo-50">
                 <Icon className="w-4 h-4" style={{ color: THEME }} />
               </div>
             </div>
@@ -1463,7 +1812,7 @@ function ChartContainer({ title, children, loading }: any) {
   return (
     <div className="bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
       <h3 className="text-sm font-black text-slate-800 mb-6 uppercase tracking-wider flex items-center gap-2">
-        <div className="w-1.5 h-5 rounded-full" style={{ background: 'linear-gradient(180deg,#1E3A5F,#2563EB)' }} />
+        <div className="w-1.5 h-5 rounded-full" style={{ background: 'linear-gradient(180deg,#334155,#1E293B)' }} />
         {title}
       </h3>
       {loading ? (

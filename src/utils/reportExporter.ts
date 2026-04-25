@@ -21,6 +21,7 @@ export interface ReportColumn {
   key: string;
   labelAr: string;
   labelEn?: string;
+  align?: 'right' | 'center' | 'left';
 }
 
 export interface ExportOptions {
@@ -35,6 +36,8 @@ export interface ExportOptions {
   format: 'excel' | 'pdf';
   filename: string;
   sheetTitle?: string;
+  /** columnKey → numeric sum; if provided a totals row is appended */
+  totals?: Record<string, number>;
 }
 
 interface ReportHeader {
@@ -178,9 +181,7 @@ export function formatExportValue(v: any, lang: 'ar' | 'en'): string {
     try {
       const d = new Date(v);
       if (!isNaN(d.getTime())) {
-        return lang === 'ar'
-          ? d.toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit' })
-          : d.toLocaleDateString('en-CA');
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
       }
     } catch { /* fall through */ }
   }
@@ -191,11 +192,9 @@ function colLabel(col: ReportColumn, lang: 'ar' | 'en'): string {
   return lang === 'en' && col.labelEn ? col.labelEn : col.labelAr;
 }
 
-function nowDateStr(lang: 'ar' | 'en'): string {
+function nowDateStr(_lang: 'ar' | 'en'): string {
   const d = new Date();
-  return lang === 'ar'
-    ? d.toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    : d.toLocaleDateString('en-CA');
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 // ─── Excel export ─────────────────────────────────────────────────────────────
@@ -280,7 +279,7 @@ async function exportExcel(opts: ExportOptions, hdr: ReportHeader): Promise<void
     const cell = HR.getCell(i + 1);
     cell.value = colLabel(col, lang);
     cell.font  = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
-    cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } };
+    cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
     cell.border = {
       top:    { style: 'thin', color: { argb: 'FFFFFFFF' } },
@@ -300,11 +299,35 @@ async function exportExcel(opts: ExportOptions, hdr: ReportHeader): Promise<void
     columns.forEach((col, ci) => {
       const cell = row.getCell(ci + 1);
       cell.value     = formatExportValue(rowData[col.key], lang);
-      cell.alignment = { horizontal: isAr ? 'right' : 'left', vertical: 'middle' };
+      cell.alignment = { horizontal: (col.align ?? (isAr ? 'right' : 'left')) as ExcelJS.Alignment['horizontal'], vertical: 'middle' };
       cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: ri % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
       cell.border    = allBdr as ExcelJS.Borders;
     });
   });
+
+  // ── Totals row (if provided) ──────────────────────────────────────────────
+  if (opts.totals && Object.keys(opts.totals).length > 0) {
+    const totalsBdr: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: 'FF334155' } };
+    const totalsRow = ws.getRow(8 + data.length);
+    totalsRow.height = 18;
+    columns.forEach((col, ci) => {
+      const cell = totalsRow.getCell(ci + 1);
+      if (opts.totals![col.key] !== undefined) {
+        cell.value = opts.totals![col.key];
+      } else if (ci === 0) {
+        cell.value = isAr ? 'المجموع' : 'Total';
+      }
+      cell.font      = { bold: true, color: { argb: 'FF334155' }, size: 11 };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFe2e8f0' } };
+      cell.alignment = { horizontal: (col.align ?? (isAr ? 'right' : 'left')) as ExcelJS.Alignment['horizontal'], vertical: 'middle' };
+      cell.border    = {
+        top:    totalsBdr as ExcelJS.Border,
+        left:   bdrStyle  as ExcelJS.Border,
+        bottom: bdrStyle  as ExcelJS.Border,
+        right:  bdrStyle  as ExcelJS.Border,
+      };
+    });
+  }
 
   // ── Column widths ──────────────────────────────────────────────────────────
   ws.columns = columns.map(col => {
@@ -349,7 +372,8 @@ async function exportPdf(opts: ExportOptions, hdr: ReportHeader): Promise<void> 
   const slot1W   = lw;
   const slot2W   = rw;
 
-  const CONTENT_W = 1400;
+  // Give each column ~150px minimum — tables with many columns need a wider canvas
+  const CONTENT_W = Math.max(1400, columns.length * 150);
 
   // Calculate img display height from natural aspect ratio
   const logoImgStyle = (img: typeof imgLeft, w: number) => {
@@ -366,9 +390,9 @@ async function exportPdf(opts: ExportOptions, hdr: ReportHeader): Promise<void> 
          </div>`
       : `<div style="width:${w}px;min-width:${w}px;"></div>`;
 
-  const tdStyle = `padding:5px 8px;font-size:9.5px;color:#1e293b;border:1px solid #e2e8f0;`;
+  const tdStyle = `padding:5px 8px;font-size:9.5px;color:#1e293b;border:1px solid #e2e8f0;white-space:nowrap;`;
   const thCells = columns.map(col =>
-    `<th style="background:#1e3a5f;color:#fff;padding:7px 8px;font-size:10px;font-weight:bold;`
+    `<th style="background:#334155;color:#fff;padding:7px 8px;font-size:10px;font-weight:bold;`
     + `text-align:${isAr ? 'right' : 'left'};border:1px solid #fff;white-space:nowrap;">`
     + `${colLabel(col, lang)}</th>`
   ).join('');
@@ -377,15 +401,27 @@ async function exportPdf(opts: ExportOptions, hdr: ReportHeader): Promise<void> 
     `<tr>${columns.map(col => {
       const val = formatExportValue(row[col.key], lang) || '—';
       const bg  = ri % 2 === 0 ? '#f8fafc' : '#fff';
-      return `<td style="${tdStyle}background:${bg};text-align:${isAr ? 'right' : 'left'}">${val}</td>`;
+      return `<td style="${tdStyle}background:${bg};text-align:${col.align ?? (isAr ? 'right' : 'left')}">${val}</td>`;
     }).join('')}</tr>`
   ).join('');
+
+  const tfootRow = opts.totals && Object.keys(opts.totals).length > 0
+    ? `<tfoot><tr style="border-top:2px solid #334155;">${
+        columns.map((col, ci) => {
+          const bg  = '#e2e8f0';
+          const val = opts.totals![col.key] !== undefined
+            ? opts.totals![col.key].toLocaleString('en-US')
+            : ci === 0 ? (isAr ? 'المجموع' : 'Total') : '';
+          return `<td style="${tdStyle}background:${bg};font-weight:bold;color:#334155;text-align:${col.align ?? (isAr ? 'right' : 'left')}">${val}</td>`;
+        }).join('')
+      }</tr></tfoot>`
+    : '';
 
   // Always render in LTR to avoid html2canvas RTL clipping — text direction applied per-element
   const html = `
     <div style="font-family:Arial,'Noto Naskh Arabic',Tahoma,sans-serif;direction:ltr;background:#fff;width:${CONTENT_W}px;overflow:visible;">
       <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;
-                  padding:10px 8px;background:#f8fafc;border-bottom:3px solid #1e3a5f;
+                  padding:10px 8px;background:#f8fafc;border-bottom:3px solid #334155;
                   width:${CONTENT_W}px;box-sizing:border-box;overflow:visible;">
         ${logoDiv(slot1Img, slot1W)}
         <div style="flex:1;min-width:0;text-align:center;padding:0 12px;direction:${dir}">
@@ -400,6 +436,7 @@ async function exportPdf(opts: ExportOptions, hdr: ReportHeader): Promise<void> 
         <table style="width:100%;border-collapse:collapse;direction:${dir}">
           <thead><tr>${thCells}</tr></thead>
           <tbody>${trRows}</tbody>
+          ${tfootRow}
         </table>
       </div>
     </div>
@@ -413,13 +450,15 @@ async function exportPdf(opts: ExportOptions, hdr: ReportHeader): Promise<void> 
 
   try {
     const el     = wrap.firstElementChild as HTMLElement;
+    // Use the actual rendered scroll-width so wide tables are never clipped
+    const renderW = Math.max(CONTENT_W, el.scrollWidth);
     const canvas = await html2canvas(el, {
       scale:           1.5,
       useCORS:         true,
       backgroundColor: '#ffffff',
       logging:         false,
-      width:           CONTENT_W,
-      windowWidth:     CONTENT_W,
+      width:           renderW,
+      windowWidth:     renderW,
     });
 
     const imgData = canvas.toDataURL('image/jpeg', 0.92);

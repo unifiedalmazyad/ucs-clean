@@ -667,4 +667,204 @@ router.put('/sector-targets', authenticate, async (req: AuthRequest, res) => {
   }
 });
 
+// ─── Financial Detail — row-level breakdown for each financial card ──────────
+// GET /financial-detail?card=estimated|invoiced|remaining|gap&page=1&limit=25&...
+// Supports same scope filters as the main endpoint (sectors, regionIds, projectType).
+// No date filter — mirrors allWorkOrders used in the main endpoint for financial cards.
+router.get('/financial-detail', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const scope = await getUserScope(req.user!.id, req.user!.role);
+    if (!scope.canViewExecutiveDashboard) {
+      return res.status(403).json({ error: 'Access denied: Executive Dashboard permission required' });
+    }
+
+    const {
+      card,
+      sectors:   sectorIdsQuery,
+      regionIds: regionIdsQuery,
+      regionId,
+      projectType,
+      page:  pageQ,
+      limit: limitQ,
+    } = req.query;
+
+    const VALID_CARDS = ['estimated', 'invoiced', 'remaining', 'gap'] as const;
+    type CardType = typeof VALID_CARDS[number];
+    if (!card || !VALID_CARDS.includes(card as CardType)) {
+      return res.status(400).json({ error: `card must be one of: ${VALID_CARDS.join(', ')}` });
+    }
+    const cardType = card as CardType;
+
+    const page  = Math.max(1, parseInt(pageQ  as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(limitQ as string) || 25));
+
+    const rawRegionIds = (regionIdsQuery as string) || (regionId as string) || '';
+
+    // Build scopeFilters — identical logic to main endpoint
+    const scopeFilters: any[] = [];
+    if (scope.scopeType === 'OWN_REGION' && scope.regionId) {
+      scopeFilters.push(eq(workOrders.regionId, scope.regionId));
+    } else if (scope.scopeType === 'OWN_SECTOR' && scope.sectorId) {
+      scopeFilters.push(eq(workOrders.sectorId, scope.sectorId));
+    } else {
+      if (sectorIdsQuery) {
+        const sIds = (sectorIdsQuery as string).split(',').filter(Boolean).slice(0, 2);
+        if (sIds.length > 0) scopeFilters.push(inArray(workOrders.sectorId, sIds));
+      }
+      if (rawRegionIds) {
+        const rIds = rawRegionIds.split(',').filter(Boolean);
+        if (rIds.length === 1) scopeFilters.push(eq(workOrders.regionId, rIds[0]));
+        else if (rIds.length > 1) scopeFilters.push(inArray(workOrders.regionId, rIds));
+      }
+    }
+    if (projectType) {
+      scopeFilters.push(eq(workOrders.projectType, projectType as string));
+    }
+
+    // Fetch all scope orders — no date filter, same as main endpoint financial cards
+    const [allOrders, allRegions, allSectors, allStages] = await Promise.all([
+      db.select().from(workOrders)
+        .where(scopeFilters.length > 0 ? and(...scopeFilters) : undefined),
+      db.select().from(regions),
+      db.select().from(sectors),
+      db.select().from(stages),
+    ]);
+
+    const regionMap = Object.fromEntries(allRegions.map(r => [r.id, r]));
+    const sectorMap = Object.fromEntries(allSectors.map(s => [s.id, s]));
+    const stageMap  = Object.fromEntries(allStages.map(s  => [s.id, s]));
+
+    // Accumulators for summary — computed across ALL rows before pagination
+    const summary = {
+      totalEstimated:     0,
+      totalInvoiced:      0,
+      totalRemaining:     0,
+      totalDiffValue:     0,
+      totalDiffEstimated: 0,
+      totalDiffInvoiced:  0,
+    };
+
+    const allRows: any[] = [];
+
+    for (const order of allOrders) {
+      const o       = order as any;
+      const est     = Number(o.estimatedValue  || 0);
+      const inv1    = Number(o.invoice1   ?? o.invoice_1   ?? 0) || 0;
+      const inv2    = Number(o.invoice2   ?? o.invoice_2   ?? 0) || 0;
+      const col     = Number(o.collectedAmount || 0);
+      const invType = o.invoiceType ?? o.invoice_type ?? null;
+
+      const sectorNameAr = (sectorMap[o.sectorId] as any)?.nameAr || '';
+      const sectorNameEn = (sectorMap[o.sectorId] as any)?.nameEn || sectorNameAr;
+      const regionNameAr = (regionMap[o.regionId] as any)?.nameAr || '';
+      const regionNameEn = (regionMap[o.regionId] as any)?.nameEn || regionNameAr;
+      const stageNameAr  = (stageMap[o.stageId]   as any)?.nameAr || '';
+
+      // Base fields shared by all cards
+      const base = {
+        id:              o.id,
+        orderNumber:     o.orderNumber     ?? o.order_number     ?? '',
+        client:          o.client          ?? null,
+        workType:        o.workType        ?? o.work_type        ?? null,
+        projectType:     o.projectType     ?? o.project_type     ?? null,
+        sectorNameAr,
+        sectorNameEn,
+        regionNameAr,
+        regionNameEn,
+        invoiceType:     invType,
+        invoice1:        inv1,
+        invoice2:        inv2,
+        collectedAmount: col,
+        estimatedValue:  est,
+        assignmentDate:  o.assignmentDate  ?? o.assignment_date  ?? null,
+      };
+
+      // Always accumulate summary totals (pre-filter, for cardTotal verification)
+      summary.totalEstimated += est;
+      summary.totalInvoiced  += col;
+
+      if (cardType === 'estimated') {
+        allRows.push({ ...base, stageNameAr });
+
+      } else if (cardType === 'invoiced') {
+        allRows.push({ ...base });
+
+      } else if (cardType === 'remaining') {
+        // Per-row expected remaining — same logic as main endpoint lines 198-208
+        let perRowRemaining = 0;
+        if (invType === 'نهائي') {
+          perRowRemaining = inv1 > 0 ? inv1 : est;
+        } else if (invType === 'جزئي') {
+          if      (inv1 === 0) perRowRemaining = est;
+          else if (inv2 === 0) perRowRemaining = inv1; // proxy: assume inv2 ≈ inv1
+          // both invoices exist → 0 (fully invoiced)
+        }
+        summary.totalRemaining += perRowRemaining;
+        if (perRowRemaining > 0) {
+          allRows.push({ ...base, expectedRemaining: perRowRemaining });
+        }
+
+      } else if (cardType === 'gap') {
+        // Fully-invoiced orders only — same condition as main endpoint lines 211-213
+        const isFullyInvoiced =
+          (invType === 'نهائي' && inv1 > 0) ||
+          (invType === 'جزئي'  && inv1 > 0 && inv2 > 0);
+        if (isFullyInvoiced) {
+          const totalInvoiced = inv1 + inv2;
+          const diffValue     = totalInvoiced - est;
+          const diffPct       = est > 0 ? (diffValue / est) * 100 : 0;
+          summary.totalDiffEstimated += est;
+          summary.totalDiffInvoiced  += totalInvoiced;
+          summary.totalDiffValue     += diffValue;
+          allRows.push({ ...base, totalInvoiced, diffValue, diffPct });
+        }
+      }
+    }
+
+    // Sort by primary field DESC
+    if      (cardType === 'estimated') allRows.sort((a, b) => b.estimatedValue    - a.estimatedValue);
+    else if (cardType === 'invoiced')  allRows.sort((a, b) => b.collectedAmount   - a.collectedAmount);
+    else if (cardType === 'remaining') allRows.sort((a, b) => b.expectedRemaining - a.expectedRemaining);
+    else if (cardType === 'gap')       allRows.sort((a, b) => Math.abs(b.diffValue) - Math.abs(a.diffValue));
+
+    // cardTotal: single value matching the corresponding dashboard card
+    const cardTotal =
+      cardType === 'estimated' ? summary.totalEstimated :
+      cardType === 'invoiced'  ? summary.totalInvoiced  :
+      cardType === 'remaining' ? summary.totalRemaining :
+      /* gap */                  summary.totalDiffValue;
+
+    // summary.totalDiffPct mirrors financial.completedDiffPct from main endpoint
+    const totalDiffPct = summary.totalDiffEstimated > 0
+      ? (summary.totalDiffValue / summary.totalDiffEstimated) * 100
+      : 0;
+
+    // Pagination — applied after all rows are built and sorted
+    const total      = allRows.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const offset     = (page - 1) * limit;
+    const rows       = allRows.slice(offset, offset + limit);
+
+    res.json({
+      rows,
+      pagination: { page, limit, total, totalPages },
+      // cardTotal = value that should match the dashboard card exactly
+      cardTotal,
+      // Full summary across all rows — use for cross-endpoint verification
+      summary: {
+        totalEstimated:     summary.totalEstimated,
+        totalInvoiced:      summary.totalInvoiced,
+        totalRemaining:     summary.totalRemaining,
+        totalDiffValue:     summary.totalDiffValue,
+        totalDiffEstimated: summary.totalDiffEstimated,
+        totalDiffInvoiced:  summary.totalDiffInvoiced,
+        totalDiffPct,
+      },
+    });
+  } catch (err) {
+    console.error('[FINANCIAL-DETAIL ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

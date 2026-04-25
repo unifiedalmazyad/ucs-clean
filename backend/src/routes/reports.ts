@@ -517,6 +517,7 @@ router.get('/templates', authenticate, async (req: AuthRequest, res) => {
       createdAt: reportTemplates.createdAt,
       updatedAt: reportTemplates.updatedAt,
       username:  users.username,
+      fullName:  users.fullName,
     }).from(reportTemplates)
       .leftJoin(users, eq(reportTemplates.createdBy, users.id))
       .orderBy(desc(reportTemplates.updatedAt));

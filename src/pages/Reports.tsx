@@ -57,6 +57,14 @@ interface ExportLog {
   createdAt: string;
 }
 
+// ─── Summable numeric columns (for totals row) ───────────────────────────────
+const SUMMABLE_COLS = new Set([
+  'length', 'estimatedValue', 'actualInvoiceValue',
+  'invoice1', 'invoice2', 'collectedAmount', 'remainingAmount',
+]);
+
+const PAGE_SIZE = 100;
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function Reports() {
   const { lang } = useLang();
@@ -96,6 +104,9 @@ export default function Reports() {
 
   // Export state
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
 
   // UI panels
   const [colPickerOpen, setColPickerOpen] = useState(false);
@@ -167,7 +178,18 @@ export default function Reports() {
     return order.filter(k => meta.columnGroups[k]).map(k => [k, meta.columnGroups[k]]);
   }, [meta]);
 
-  const allColKeys = useMemo(() => allGroups.flatMap(([, g]) => g.columns.map(c => c.columnKey)), [allGroups]);
+  // Sort by global sortOrder (matches admin columns page order), virtual groups at end
+  const allColKeys = useMemo(() => {
+    const regular = allGroups
+      .filter(([k]) => k !== '__status' && k !== 'PERMITS')
+      .flatMap(([, g]) => g.columns)
+      .sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999))
+      .map(c => c.columnKey);
+    const virtual = allGroups
+      .filter(([k]) => k === '__status' || k === 'PERMITS')
+      .flatMap(([, g]) => g.columns.map(c => c.columnKey));
+    return [...regular, ...virtual];
+  }, [allGroups]);
 
   const colLabelMap: Record<string, string> = useMemo(() => {
     const m: Record<string, string> = {};
@@ -252,7 +274,7 @@ export default function Reports() {
     const dt = dataTypeMap[columnKey] ?? '';
     const isDate = dt === 'date' || dt === 'timestamp' || dk.toLowerCase().includes('date') || ['createdAt', 'updatedAt', 'assignmentDate'].includes(dk);
     if (isDate) {
-      return formatDateValue(v, lang === 'en' ? 'en-GB' : 'ar-EG');
+      return formatDateValue(v, 'en-GB');
     }
     return String(v);
   }
@@ -392,6 +414,7 @@ export default function Reports() {
         format,
         filename,
         sheetTitle: lang === 'en' ? 'Report' : 'تقرير',
+        totals: Object.keys(columnTotals).length > 0 ? columnTotals : undefined,
       });
 
       const logFilters: Record<string, string> = {};
@@ -417,6 +440,45 @@ export default function Reports() {
       setExporting(null);
     }
   }
+
+  // ── Column totals for summable numeric columns ────────────────────────────
+  const columnTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    if (filteredRows.length === 0) return totals;
+    effectiveCols.forEach(k => {
+      if (!SUMMABLE_COLS.has(k)) return;
+      totals[k] = filteredRows.reduce((sum: number, row: any) => {
+        const v = rowVal(row, k);
+        const n = typeof v === 'number' ? v : Number(v);
+        return sum + (isFinite(n) ? n : 0);
+      }, 0);
+    });
+    return totals;
+  }, [filteredRows, effectiveCols]);
+
+  const hasSummableCols = effectiveCols.some(k => SUMMABLE_COLS.has(k));
+
+  // ── Pagination ────────────────────────────────────────────────────────────
+  // Reset to page 1 whenever any filter changes
+  useEffect(() => { setCurrentPage(1); }, [
+    filterSearch, filterRegion, filterSector,
+    filterExec, filterFin, filterOverall, filterWorkStatus,
+    filterProjectTypes, filterProcedures, filterDelays,
+    filterDateFrom, filterDateTo,
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const pagedRows  = filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const pageNumbers: (number | '...')[] = useMemo(() => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const pages: (number | '...')[] = [1];
+    if (currentPage > 3) pages.push('...');
+    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) pages.push(i);
+    if (currentPage < totalPages - 2) pages.push('...');
+    pages.push(totalPages);
+    return pages;
+  }, [currentPage, totalPages]);
 
   const hasFilters = !!(filterRegion || filterSector || filterExec.length || filterFin.length || filterOverall.length || filterWorkStatus.length || filterProjectTypes.length || filterProcedures.length || filterDelays.length || filterSearch || filterDateFrom || filterDateTo);
   const isLoading  = metaLoading || dataLoading;
@@ -838,7 +900,7 @@ export default function Reports() {
         </div>
 
         {/* Table */}
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto pb-4">
           {!isLoading && filteredRows.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-slate-400">
               <FileSpreadsheet className="w-12 h-12 mb-3 opacity-25" />
@@ -862,13 +924,13 @@ export default function Reports() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row, i) => (
+                {pagedRows.map((row, i) => (
                   <tr
                     key={row.id ?? i}
                     className="hover:bg-indigo-50/40 border-b border-slate-100 transition-colors"
                     data-testid={`row-report-${row.id ?? i}`}
                   >
-                    <td className="px-3 py-2 text-xs text-slate-400 font-mono">{i + 1}</td>
+                    <td className="px-3 py-2 text-xs text-slate-400 font-mono">{(currentPage - 1) * PAGE_SIZE + i + 1}</td>
                     {effectiveCols.map(k => {
                       const isStatus      = ['execStatus', 'finStatus', 'overallStatus'].includes(k);
                       const isPermitStatus = k === 'permitStatus';
@@ -896,9 +958,76 @@ export default function Reports() {
                   </tr>
                 ))}
               </tbody>
+              {hasSummableCols && (
+                <tfoot>
+                  <tr className="border-t-2" style={{ borderColor: '#334155', backgroundColor: '#e2e8f0' }}>
+                    <td className="px-3 py-2 text-xs font-semibold whitespace-nowrap" style={{ color: '#334155' }}>
+                      {t('المجموع', 'Total')}
+                    </td>
+                    {effectiveCols.map(k => (
+                      <td key={k} className="px-3 py-2 whitespace-nowrap">
+                        {SUMMABLE_COLS.has(k) && columnTotals[k] !== undefined ? (
+                          <span className="text-xs font-bold text-slate-800">
+                            {columnTotals[k].toLocaleString('en-US')}
+                          </span>
+                        ) : null}
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              )}
             </table>
           )}
         </div>
+
+        {/* ── Pagination bar ───────────────────────────────────────────────── */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 md:px-6 py-2.5 bg-white border-t border-slate-200 flex-shrink-0 gap-4 flex-wrap">
+            <span className="text-xs text-slate-500">
+              {t(
+                `صفحة ${currentPage} من ${totalPages} · الصفوف ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, filteredRows.length)}`,
+                `Page ${currentPage} of ${totalPages} · Rows ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, filteredRows.length)}`
+              )}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+              >«</button>
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs rounded border border-slate-200 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+              >{t('السابق', 'Prev')}</button>
+
+              {pageNumbers.map((p, idx) =>
+                p === '...'
+                  ? <span key={`e${idx}`} className="px-1.5 text-slate-400 text-xs select-none">…</span>
+                  : <button
+                      key={p}
+                      onClick={() => setCurrentPage(Number(p))}
+                      className={`w-8 h-7 text-xs rounded border transition-colors ${
+                        currentPage === p
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                      }`}
+                    >{p}</button>
+              )}
+
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs rounded border border-slate-200 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+              >{t('التالي', 'Next')}</button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+              >»</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Export History Drawer ────────────────────────────────────────── */}

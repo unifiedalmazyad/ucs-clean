@@ -61,6 +61,7 @@ const COLUMNS = [
   { columnKey: 'invoice_type',               labelAr: 'نوع المستخلص',                   groupKey: 'FINANCE', category: 'FIN',  dataType: 'select' },
   { columnKey: 'invoice_1',                  labelAr: 'مستخلص 1',                       groupKey: 'FINANCE', category: 'FIN',  dataType: 'currency', isSensitive: true },
   { columnKey: 'invoice_2',                  labelAr: 'مستخلص 2',                       groupKey: 'FINANCE', category: 'FIN',  dataType: 'currency', isSensitive: true },
+  { columnKey: 'invoice_2_number',           labelAr: 'رقم المستخلص 2',                 groupKey: 'FINANCE', category: 'FIN',  dataType: 'text' },
   { columnKey: 'collected_amount',           labelAr: 'القيمة المحصلة',                 groupKey: 'FINANCE', category: 'FIN',  dataType: 'currency', isSensitive: true },
   { columnKey: 'remaining_amount',           labelAr: 'المتبقي',                         groupKey: 'FINANCE', category: 'FIN',  dataType: 'currency', isSensitive: true },
   // DELAY CLASSIFICATION — تصنيف التأخير

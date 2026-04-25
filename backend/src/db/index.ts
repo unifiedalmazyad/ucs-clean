@@ -200,6 +200,11 @@ if (isDemo) {
       changes TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Migration for existing tables (if they were created in a previous version)
@@ -288,6 +293,15 @@ if (isDemo) {
     connectionString: process.env.DATABASE_URL,
   });
   db = drizzlePg(pool, { schema: schemaPg });
+
+  // Ensure system_settings table exists (key-value store for logos, settings, etc.)
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `).catch(() => {});
 
   // Run additive migrations (safe — column already exists errors are ignored)
   pool.query(`ALTER TABLE stages ADD COLUMN IF NOT EXISTS name_en TEXT;`)
@@ -508,6 +522,39 @@ if (isDemo) {
     ON CONFLICT (role, table_name, column_key) DO UPDATE
       SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write;
   `).catch(e => console.warn('[MIGRATION] invoice_2_billing_date perms:', e?.message ?? e));
+
+  // Register invoice_2_number in column_catalog (FINANCE group, sort_order 900)
+  pool.query(`
+    INSERT INTO column_catalog (id, table_name, column_key, physical_key, label_ar, label_en, group_key, category, data_type, is_sensitive, is_custom, is_enabled, show_in_create, sort_order)
+    VALUES (gen_random_uuid(), 'work_orders', 'invoice_2_number', 'invoice_2_number',
+            'رقم المستخلص 2', 'Invoice 2 No.',
+            'FINANCE', 'FIN', 'text', false, false, true, false, 900)
+    ON CONFLICT (table_name, column_key) DO UPDATE
+      SET label_ar     = EXCLUDED.label_ar,
+          label_en     = EXCLUDED.label_en,
+          group_key    = EXCLUDED.group_key,
+          category     = EXCLUDED.category,
+          data_type    = EXCLUDED.data_type,
+          physical_key = EXCLUDED.physical_key,
+          is_custom    = false,
+          is_enabled   = true,
+          sort_order   = EXCLUDED.sort_order;
+  `).catch(e => console.warn('[MIGRATION] invoice_2_number catalog:', e?.message ?? e));
+
+  // Register permissions for invoice_2_number — ADMIN/MANAGER/FINANCE can write, others read-only
+  pool.query(`
+    INSERT INTO role_column_permissions (role, table_name, column_key, can_read, can_write)
+    VALUES
+      ('ADMIN',       'work_orders', 'invoice_2_number', true, true),
+      ('MANAGER',     'work_orders', 'invoice_2_number', true, true),
+      ('OPERATOR',    'work_orders', 'invoice_2_number', true, false),
+      ('COORDINATOR', 'work_orders', 'invoice_2_number', true, false),
+      ('GIS',         'work_orders', 'invoice_2_number', true, false),
+      ('FINANCE',     'work_orders', 'invoice_2_number', true, true),
+      ('VIEWER',      'work_orders', 'invoice_2_number', true, false)
+    ON CONFLICT (role, table_name, column_key) DO UPDATE
+      SET can_read = EXCLUDED.can_read, can_write = EXCLUDED.can_write;
+  `).catch(e => console.warn('[MIGRATION] invoice_2_number perms:', e?.message ?? e));
 
   // Register completion_cert_date in column_catalog (PROCEDURE_155 group, sort_order 408)
   pool.query(`

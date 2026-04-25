@@ -484,9 +484,9 @@ router.patch('/column-groups/:id/rename-key', authenticate, authorize(['ADMIN'])
         await tx.execute(sql.raw(`ALTER TABLE column_catalog DROP CONSTRAINT IF EXISTS "${fkName}"`));
       }
       // 1. Update the group key itself
-      await tx.execute(sql.raw(`UPDATE column_groups SET key = '${newKey.replace(/'/g, "''")}' WHERE id = '${req.params.id}'`));
+      await tx.execute(sql`UPDATE column_groups SET key = ${newKey} WHERE id = ${req.params.id}`);
       // 2. Update all referencing columns in catalog
-      await tx.execute(sql.raw(`UPDATE column_catalog SET group_key = '${newKey.replace(/'/g, "''")}' WHERE group_key = '${oldKey.replace(/'/g, "''")}'`));
+      await tx.execute(sql`UPDATE column_catalog SET group_key = ${newKey} WHERE group_key = ${oldKey}`);
       // Re-add FK constraint
       if (fkName) {
         await tx.execute(sql.raw(`ALTER TABLE column_catalog ADD CONSTRAINT "${fkName}" FOREIGN KEY (group_key) REFERENCES column_groups(key)`));
@@ -557,11 +557,11 @@ router.patch('/column-categories/:id/rename-key', authenticate, authorize(['ADMI
     if (conflict) return res.status(409).json({ error: `الكود "${newKey}" مستخدم بالفعل` });
 
     await db.transaction(async (tx) => {
-      await tx.execute(sql.raw(`UPDATE column_categories SET key = '${newKey}' WHERE id = '${req.params.id}'`));
-      await tx.execute(sql.raw(`UPDATE column_catalog SET category = '${newKey}' WHERE category = '${oldKey}'`));
-      await tx.execute(sql.raw(`UPDATE stages SET category = '${newKey}' WHERE category = '${oldKey}'`));
-      await tx.execute(sql.raw(`UPDATE kpi_templates SET category = '${newKey}' WHERE category = '${oldKey}'`));
-      await tx.execute(sql.raw(`UPDATE kpi_rules SET category = '${newKey}' WHERE category = '${oldKey}'`));
+      await tx.execute(sql`UPDATE column_categories SET key = ${newKey} WHERE id = ${req.params.id}`);
+      await tx.execute(sql`UPDATE column_catalog SET category = ${newKey} WHERE category = ${oldKey}`);
+      await tx.execute(sql`UPDATE stages SET category = ${newKey} WHERE category = ${oldKey}`);
+      await tx.execute(sql`UPDATE kpi_templates SET category = ${newKey} WHERE category = ${oldKey}`);
+      await tx.execute(sql`UPDATE kpi_rules SET category = ${newKey} WHERE category = ${oldKey}`);
     });
 
     res.json({ message: 'تم تغيير الكود بنجاح', oldKey, newKey });
@@ -1291,8 +1291,9 @@ const logoUpload = multer({
 router.post('/upload-logo', authenticate, authorize(['ADMIN']), logoUpload.single('logo'), async (req: any, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'لم يتم إرسال أي صورة' });
-    const side = (req.query.side === 'left') ? 'left' : 'right';
-    const settingKey = `logo_${side}_url`;
+    const side = req.query.side === 'left' ? 'left' : req.query.side === 'sidebar' ? 'sidebar' : 'right';
+    // sidebar uses its own key to avoid collisions with report logo keys
+    const settingKey = side === 'sidebar' ? 'sidebar_logo_url' : `logo_${side}_url`;
     const publicUrl = `/public/logos/${req.file.filename}`;
     await db.execute(sql`
       INSERT INTO system_settings (key, value, updated_at) VALUES (${settingKey}, ${publicUrl}, NOW())
@@ -1317,7 +1318,8 @@ router.get('/report-header', authenticate, async (_req, res) => {
       WHERE key IN (
         'logo_right_url','logo_left_url','company_name_ar','company_name_en',
         'logo_right_width_excel','logo_left_width_excel',
-        'logo_right_width_pdf','logo_left_width_pdf'
+        'logo_right_width_pdf','logo_left_width_pdf',
+        'sidebar_logo_url'
       )
     `);
     const obj: Record<string, string> = {};
@@ -1331,6 +1333,7 @@ router.get('/report-header', authenticate, async (_req, res) => {
       logoLeftWidthExcel:  obj['logo_left_width_excel']   ? Number(obj['logo_left_width_excel'])  : 150,
       logoRightWidthPdf:   obj['logo_right_width_pdf']    ? Number(obj['logo_right_width_pdf'])   : 150,
       logoLeftWidthPdf:    obj['logo_left_width_pdf']     ? Number(obj['logo_left_width_pdf'])    : 150,
+      sidebarLogoUrl:      obj['sidebar_logo_url']        ?? null,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch report header' });

@@ -50,7 +50,7 @@ function formatDate(v: any) {
   try {
     const d = new Date(v);
     if (isNaN(d.getTime())) return String(v);
-    return d.toLocaleDateString('ar-EG', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
   } catch { return String(v); }
 }
 
@@ -118,7 +118,7 @@ export default function ReportCenter() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-auto p-4 md:p-6">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6">
         {activeTab === 'templates'  && <TemplatesPanel />}
         {activeTab === 'new-orders' && <NewOrdersReport />}
         {activeTab === 'overdue'    && <OverdueReport />}
@@ -191,7 +191,7 @@ function TemplatesPanel() {
           {templates.map(t => {
             const isRunning = activeRun?.id === t.id;
             return (
-              <div key={t.id} className={`bg-white rounded-xl border transition-all ${isRunning ? 'border-indigo-400 shadow-md' : 'border-slate-200'}`}>
+              <div key={t.id} className={`bg-white rounded-xl border transition-all min-w-0 ${isRunning ? 'border-indigo-400 shadow-md' : 'border-slate-200'}`}>
                 {/* Template card header */}
                 <div className="p-4 flex items-start gap-4">
                   <div className="flex-1 min-w-0">
@@ -206,8 +206,8 @@ function TemplatesPanel() {
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
                       {lang === 'en' ? `${(t.columns ?? []).length} columns` : `${(t.columns ?? []).length} عمود`}
-                      {t.username && ` · ${t.username}`}
-                      {' · '}{new Date(t.updatedAt).toLocaleDateString(lang === 'en' ? 'en-GB' : 'ar-EG')}
+                      {(t.fullName || t.username) && ` · ${t.fullName || t.username}`}
+                      {' · '}{new Date(t.updatedAt).toLocaleDateString('en-GB')}
                     </p>
                     {Object.keys(t.filters ?? {}).length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
@@ -274,6 +274,19 @@ const NAME_OVERRIDES: Record<string, string> = {
   regionId: 'regionName',
   sectorId: 'sectorName',
 };
+
+// Columns that are genuinely numeric/quantitative and safe to sum.
+// Keys must be camelCase — the /reports/meta endpoint converts all columnKeys via toCamel().
+// Only these 7 columns will ever appear in the totals row.
+const SUMMABLE_COLS = new Set([
+  'length',
+  'estimatedValue',
+  'actualInvoiceValue',
+  'invoice1',
+  'invoice2',
+  'collectedAmount',
+  'remainingAmount',
+]);
 
 function TemplateResultPanel({ template }: { template: any }) {
   const { lang } = useLang();
@@ -353,6 +366,20 @@ function TemplateResultPanel({ template }: { template: any }) {
     return str;
   };
 
+  // Compute column totals for summable columns
+  const columnTotals: Record<string, number> = {};
+  if (rows.length > 0) {
+    visibleCols.forEach(k => {
+      if (!SUMMABLE_COLS.has(k)) return;
+      columnTotals[k] = rows.reduce((sum, row) => {
+        const v = resolveRaw(row, k);
+        const n = typeof v === 'number' ? v : Number(v);
+        return sum + (isFinite(n) ? n : 0);
+      }, 0);
+    });
+  }
+  const hasSummableCols = visibleCols.some(k => SUMMABLE_COLS.has(k));
+
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
 
   const doExport = async (format: 'excel' | 'pdf') => {
@@ -373,6 +400,11 @@ function TemplateResultPanel({ template }: { template: any }) {
         labelAr: colMeta[k]?.labelAr ?? k,
         labelEn: colMeta[k]?.labelEn,
       }));
+      // Remap totals keys to match the prefixed export keys
+      const exportTotals: Record<string, number> = {};
+      Object.entries(columnTotals).forEach(([k, v]) => {
+        exportTotals[`__export_${k}`] = v;
+      });
       const filename = lang === 'en'
         ? `${template.name}_${dateTag}`
         : `${template.name}-${dateTag}`;
@@ -384,6 +416,7 @@ function TemplateResultPanel({ template }: { template: any }) {
         format,
         filename:  `${filename}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
         sheetTitle: template.name,
+        totals:    Object.keys(exportTotals).length > 0 ? exportTotals : undefined,
       });
     } catch (e) { console.error(e); } finally { setExporting(null); }
   };
@@ -423,7 +456,7 @@ function TemplateResultPanel({ template }: { template: any }) {
         </p>
       ) : (
         <div className="bg-white rounded-lg border border-slate-200 overflow-auto max-h-[450px]">
-          <table className="w-full text-xs min-w-[500px]">
+          <table className="w-full text-xs min-w-max">
             <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
               <tr>
                 {visibleCols.map(k => (
@@ -444,6 +477,26 @@ function TemplateResultPanel({ template }: { template: any }) {
                 </tr>
               ))}
             </tbody>
+            {hasSummableCols && (
+              <tfoot>
+                <tr className="border-t-2" style={{ borderColor: '#334155', backgroundColor: '#e2e8f0' }}>
+                  {visibleCols.map((k, i) => {
+                    if (SUMMABLE_COLS.has(k) && columnTotals[k] !== undefined) {
+                      return (
+                        <td key={k} className="px-3 py-2 font-bold whitespace-nowrap" style={{ color: '#334155' }}>
+                          {columnTotals[k].toLocaleString('en-US')}
+                        </td>
+                      );
+                    }
+                    return (
+                      <td key={k} className="px-3 py-2 font-semibold whitespace-nowrap" style={{ color: '#334155' }}>
+                        {i === 0 ? (lang === 'en' ? 'Total' : 'المجموع') : ''}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}
@@ -963,7 +1016,7 @@ function MonthlyReport() {
   const monthLabel = (m: string) => {
     try {
       const [y, mo] = m.split('-');
-      return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString(lang === 'en' ? 'en-US' : 'ar-SA', { month: 'long', year: 'numeric' });
+      return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     } catch { return m; }
   };
 

@@ -14,6 +14,7 @@ Key features:
 - Import/Export: Excel-based bulk import with Preview→Commit flow, template download, and audit log (Admin only)
 - Periodic KPI Report: role-scoped dashboard at `/reports/periodic-kpis` — full metrics engine with configurable averages (periodic_kpi_metrics table), date-basis filter (createdAt or any date column), hide-empty toggle, column picker per table (user_report_column_prefs), metrics mini-badges on region cards, expanded region panel with per-projectType averages, financial tab
 - Reports (`/reports`): role-scoped work order export page — column selector, filters (region/sector/KPI status), Excel download, export history log. Respects each user's data scope and column-level read permissions. Separate from raw admin export (`/export-center`).
+- Executive Dashboard (`/dashboard/executive`): financial KPI cards (estimated / invoiced / remaining / gap), drill-down paginated tables per card with Excel + PDF export (paginated batches of 100 rows), system settings with sidebar logo upload, dark mode toggle.
 
 ## User Preferences
 
@@ -231,3 +232,84 @@ Lightweight event dispatcher at `backend/src/events/`:
 | `GEMINI_API_KEY` | Google Gemini AI API key |
 | `PORT` | Server port (default: 3000) |
 | `NODE_ENV` | `production` serves static files; otherwise uses Vite middleware |
+
+## Executive Dashboard (`/dashboard/executive`)
+
+### Overview
+Financial summary dashboard with 4 KPI cards and drill-down tables.
+
+**Route file:** `backend/src/routes/executiveDashboard.ts`  
+**Frontend:** `src/pages/DashboardExecutive.tsx`  
+**Sidebar entry:** requires role with `canViewExecutive` permission (or ADMIN)
+
+### KPI Cards
+| Card | Arabic | Description |
+|------|--------|-------------|
+| `estimated` | التقديري | Sum of `contract_value` for all active work orders |
+| `invoiced` | المستخلص | Sum of `invoice_1` + `invoice_2` where issued |
+| `remaining` | المتبقي المتوقع | Per-row remaining balance (see business logic note below) |
+| `gap` | الفجوة | Orders where contract value > invoiced amount |
+
+### API Endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/dashboard/executive/summary` | Returns all 4 card totals + change % vs prior period |
+| `GET` | `/api/dashboard/executive/financial-detail` | Paginated drill-down rows for a specific card |
+
+**financial-detail query params:**
+- `card` — `estimated | invoiced | remaining | gap`
+- `page` — page number (default 1)
+- `limit` — max 100 per page
+- `sectors` — comma-separated sector names (optional filter)
+- `regionIds` — comma-separated region UUIDs (optional filter)
+- `projectType` — single project type string (optional filter)
+
+### Export (Excel / PDF)
+Export buttons appear in the drill-down table header once data is loaded.
+- Fetches ALL pages (limit=100 per batch) before exporting
+- Uses shared `src/utils/reportExporter.ts` (ExcelJS + jsPDF)
+- Filename: `تنفيذي_{cardName}_{date}.xlsx|pdf`
+- Columns and alignment from `DETAIL_COLS` constant in `DashboardExecutive.tsx`
+- Numeric columns → `text-center`; text columns → `text-right` (UI + Excel + PDF)
+
+### reportExporter.ts — Per-Column Alignment
+`ReportColumn` interface extended with optional `align?: 'right' | 'center' | 'left'`.  
+Used in: Excel data cells, Excel totals row, PDF table body, PDF totals row.  
+Default (if `align` omitted): `isAr ? 'right' : 'left'`.
+
+### ⚠️ Known Business Logic Issue — Remaining vs Gap Cards
+**Status: Analysis complete, fix NOT yet approved.**
+
+6 rows in the DB have `invoice_type = 'نهائي'` AND `invoice_1 > 0` AND `invoice_2 > 0`.
+
+- The **gap** card logic treats `(invType === 'نهائي' && inv1 > 0)` as "fully invoiced" → these rows do NOT appear in gap.
+- The **remaining** card logic uses `perRowRemaining = inv1 > 0 ? inv1 : est` for all "نهائي" rows → these rows DO appear in remaining with `expectedRemaining = inv1`.
+- **Contradiction:** the same rows are "fully invoiced" by gap logic but still "have remaining balance" by remaining logic.
+- The display/export is correct — it shows exactly what the backend computes.
+- Root cause is in `executiveDashboard.ts` remaining-card business logic.
+- Do NOT change until business intent is confirmed with user.
+
+## System Settings Updates (2026-04-25)
+
+### Sidebar Logo
+- New setting key: `sidebar_logo_url` (stored in `system_settings`)
+- Upload endpoint: `POST /api/admin/upload-logo?side=sidebar`
+- Read via `GET /api/admin/report-header` → `sidebarLogoUrl` field
+- Separate from report logo keys (`logo_right_url`, `logo_left_url`) to avoid collisions
+
+### Design System
+- Tailwind CSS v4 with `@theme` overrides — maps `indigo-*` → slate palette, `amber-*` → subtle gold
+- Dark mode: toggle `.dark` on `<html>` element; all semantic `var(--*)` variables flip automatically
+- Arabic font: `'Segoe UI', 'Tahoma', 'Arial'` fallback chain for Arabic text shaping
+
+## Security Notes
+
+### SQL Injection Fix (2026-04-25)
+Two SQL injection vulnerabilities fixed in `backend/src/routes/admin.ts`:
+
+1. **Group key rename** (was line 487): `req.params.id`, `newKey`, `oldKey` were interpolated into `sql.raw()` strings. Fixed by replacing with Drizzle `sql\`...\`` template tag which creates parameterized queries.
+
+2. **Category key rename** (was line 560): Same pattern — `newKey`, `oldKey`, `req.params.id` all raw-interpolated with NO sanitization. Fixed with same approach.
+
+**Rule:** Never use `sql.raw()` with user-controlled values. Use Drizzle's `sql\`...\`` template tag for parameterized binding, or ORM methods (`.update().set().where()`).  
+`sql.raw()` is safe ONLY for static strings like DDL constraint names.
