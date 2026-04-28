@@ -404,8 +404,10 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       if (!periodSectorFinMap[sid]) {
         periodSectorFinMap[sid] = { estimated: 0, invoiced: 0, collected: 0, completed: 0, total: 0 };
       }
+      const _inv1 = Number(o.invoice1 ?? o.invoice_1 ?? 0) || 0;
+      const _inv2 = Number(o.invoice2 ?? o.invoice_2 ?? 0) || 0;
       periodSectorFinMap[sid].estimated += Number(o.estimatedValue || 0);
-      periodSectorFinMap[sid].invoiced  += Number(o.collectedAmount || 0);
+      periodSectorFinMap[sid].invoiced  += _inv1 + _inv2;
       periodSectorFinMap[sid].collected += Number(o.collectedAmount || 0);
       periodSectorFinMap[sid].total++;
       if (terminalStageIds.has(o.stageId)) periodSectorFinMap[sid].completed++;
@@ -470,7 +472,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         const invoiced  = fin?.invoiced  ?? 0;
         const collected = fin?.collected ?? 0;
         const salesRate      = estimated > 0 ? (invoiced  / estimated) * 100 : null;
-        const collectionRate = invoiced  > 0 ? (collected / invoiced)  * 100 : null;
+        const collectionRate = estimated > 0 ? (invoiced  / estimated) * 100 : null;
 
         // المستهدفات الخمسة — النسب كما هي، المبلغ مُتناسب مع الفترة
         const execComplianceTarget = target?.execComplianceTarget != null ? Number(target.execComplianceTarget) : null;
@@ -480,9 +482,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         // المستهدف السنوي للمبيعات مُتناسب مع الفترة المختارة (مثال: شهر = 1/12)
         const annualSalesTarget    = target?.salesAmountTarget    != null ? Number(target.salesAmountTarget)    : null;
         const salesAmountTarget    = annualSalesTarget != null ? annualSalesTarget * yearFraction : null;
-        // نسبة التقدم في المبيعات = مفوتر / مستهدف الفترة × 100
+        // نسبة التقدم في المبيعات = تقديري / مستهدف الفترة × 100
         const salesProgressPct = salesAmountTarget && salesAmountTarget > 0
-          ? Math.min((invoiced / salesAmountTarget) * 100, 999)
+          ? Math.min((estimated / salesAmountTarget) * 100, 999)
           : null;
 
         return {

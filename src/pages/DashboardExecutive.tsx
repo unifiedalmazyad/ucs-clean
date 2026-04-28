@@ -1298,10 +1298,10 @@ export default function DashboardExecutive() {
                 ? s.annualSalesTarget / granDivisor
                 : (s.salesAmountTarget ?? null);
               const unitSalesPct = unitSalesTarget && unitSalesTarget > 0
-                ? Math.min((s.invoiced / unitSalesTarget) * 100, 999)
+                ? Math.min((s.estimated / unitSalesTarget) * 100, 999)
                 : s.salesProgressPct;
 
-              // المبيعات: تقدم = مفوتر / مستهدف الوحدة × 100 (عتبات 90/70)
+              // المبيعات: تقدم = تقديري / مستهدف الوحدة × 100 (عتبات 90/70)
               const salesTL   = tl(unitSalesPct,           null,                      true,  90, 70);
               // الالتزام التنفيذي: له الآن مستهدف يضبطه المدير
               const execTL    = tl(s.execComplianceRate,  s.execComplianceTarget,    false);
@@ -1394,8 +1394,8 @@ export default function DashboardExecutive() {
                     </div>
                     <div className="space-y-4">
                       <MetricRow
-                        label={lang === 'en' ? 'Sales (Invoiced)' : 'المبيعات (مفوتر)'}
-                        value={abbrevNum(s.invoiced) + ' ر.س'}
+                        label={lang === 'en' ? 'Sales (Estimated)' : 'المبيعات (تقديري)'}
+                        value={abbrevNum(s.estimated) + ' ر.س'}
                         sub={[
                           unitSalesPct !== null ? `${fmtPct(unitSalesPct)} ${lang === 'en' ? 'of target' : 'من المستهدف'}` : null,
                           s.annualSalesTarget != null ? `${lang === 'en' ? 'Annual' : 'سنوي'}: ${abbrevNum(s.annualSalesTarget)} ر.س` : null,
@@ -1404,19 +1404,19 @@ export default function DashboardExecutive() {
                         colors={salesTL}
                         barPct={unitSalesPct}
                         tooltip={lang === 'en'
-                          ? 'Progress toward the period revenue target = Total invoiced ÷ Target set for this sector. Target is configured by the manager in sector settings.'
-                          : 'نسبة تحقق مستهدف الإيرادات للفترة = إجمالي المفوتر ÷ المستهدف المحدد للقطاع. المستهدف يضبطه المدير من إعدادات القطاعات.'}
+                          ? 'Progress toward the period revenue target = Estimated value ÷ Target set for this sector. Target is configured by the manager in sector settings.'
+                          : 'نسبة تحقق مستهدف الإيرادات للفترة = القيمة التقديرية ÷ المستهدف المحدد للقطاع. المستهدف يضبطه المدير من إعدادات القطاعات.'}
                       />
                       <MetricRow
                         label={lang === 'en' ? 'Collection Rate' : 'نسبة التحصيل'}
                         value={fmtPct(s.collectionRate)}
-                        sub={`${lang === 'en' ? 'Collected' : 'محصّل'}: ${abbrevNum(s.collected)} ر.س`}
+                        sub={`${lang === 'en' ? 'Invoiced' : 'المفوتر'}: ${abbrevNum(s.invoiced)} ر.س`}
                         target={s.collectionRateTarget !== null ? s.collectionRateTarget + '%' : null}
                         colors={collTL}
                         barPct={s.collectionRate}
                         tooltip={lang === 'en'
-                          ? 'Percentage of invoiced amounts actually collected. Example: invoices of 100,000 with 75,000 collected = 75% collection rate.'
-                          : 'نسبة ما تم تحصيله فعلياً من إجمالي المبالغ المفوترة. مثال: فواتير بـ 100,000 وتحصيل 75,000 = نسبة تحصيل 75%.'}
+                          ? 'Percentage of estimated value that has been invoiced (Invoice 1 + Invoice 2) ÷ Estimated value × 100.'
+                          : 'نسبة ما تم فوترته من القيمة التقديرية = (مستخلص 1 + مستخلص 2) ÷ القيمة التقديرية × 100.'}
                       />
                       <MetricRow
                         label={lang === 'en' ? 'Financial Compliance' : 'الالتزام المالي'}
