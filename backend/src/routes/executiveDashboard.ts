@@ -480,8 +480,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         const estimated = fin?.estimated ?? 0;
         const invoiced  = fin?.invoiced  ?? 0;
         const collected = fin?.collected ?? 0;
-        const salesRate      = estimated > 0 ? (invoiced  / estimated) * 100 : null;
-        const collectionRate = estimated > 0 ? (invoiced  / estimated) * 100 : null;
+        const salesRate      = estimated > 0 ? (invoiced   / estimated) * 100 : null;
+        const collectionRate = invoiced  > 0 ? (collected / invoiced)  * 100 : null;
 
         // المستهدفات الخمسة — النسب كما هي، المبلغ مُتناسب مع الفترة
         const execComplianceTarget = target?.execComplianceTarget != null ? Number(target.execComplianceTarget) : null;
