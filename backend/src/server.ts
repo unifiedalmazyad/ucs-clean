@@ -179,10 +179,11 @@ async function startServer() {
             .from(users)
             .where(eq(users.id, jwtUser.id));
 
-          const regionMatch = !att.regionId || !userRecord?.regionId || userRecord.regionId === att.regionId;
-          const sectorMatch = !att.sectorId || !userRecord?.sectorId || userRecord.sectorId === att.sectorId;
-
-          if (!regionMatch || !sectorMatch) {
+          // Scoped users may only access files within their region/sector
+          if (userRecord?.regionId && att.regionId && userRecord.regionId !== att.regionId) {
+            return res.status(403).json({ error: 'ليس لديك صلاحية الوصول إلى هذا الملف' });
+          }
+          if (userRecord?.sectorId && att.sectorId && userRecord.sectorId !== att.sectorId) {
             return res.status(403).json({ error: 'ليس لديك صلاحية الوصول إلى هذا الملف' });
           }
         }

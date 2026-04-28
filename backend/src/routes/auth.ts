@@ -4,12 +4,9 @@ import bcrypt from 'bcryptjs';
 import { db } from '../db';
 import { users, auditLogs, roleDefinitions } from '../db/schema';
 import { eq } from 'drizzle-orm';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, JWT_SECRET } from '../middleware/auth';
 
 const router = express.Router();
-
-// JWT_SECRET validation is handled centrally in middleware/auth.ts
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_fallback_secret_not_for_production';
 
 // ── In-memory login rate limiter (brute-force protection) ───────────────────
 // Tracks failed attempts per IP. After MAX_FAILURES failures within the window,

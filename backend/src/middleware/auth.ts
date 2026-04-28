@@ -31,7 +31,7 @@ const _WEAK_SECRETS = new Set([
   }
 })();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_fallback_secret_not_for_production';
+export const JWT_SECRET = process.env.JWT_SECRET || 'dev_fallback_secret_not_for_production';
 
 export interface AuthRequest extends Request {
   user?: {

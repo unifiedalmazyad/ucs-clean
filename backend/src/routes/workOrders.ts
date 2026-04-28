@@ -223,6 +223,18 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
 
     if (!order) return res.status(404).json({ error: 'Not found' });
 
+    // Enforce region/sector scope — mirrors the check in /:id/edit-context
+    const scope = await getUserScope(req.user!.id);
+    const orderAny = order as any;
+    if (scope.scopeType === 'OWN_REGION' && scope.regionId &&
+        (orderAny.regionId ?? orderAny.region_id) !== scope.regionId) {
+      return res.status(403).json({ error: 'Access denied: outside your region' });
+    }
+    if (scope.scopeType === 'OWN_SECTOR' && scope.sectorId &&
+        (orderAny.sectorId ?? orderAny.sector_id) !== scope.sectorId) {
+      return res.status(403).json({ error: 'Access denied: outside your sector' });
+    }
+
     const filtered = await filterOutput([order], req.user!.id, req.user!.role, 'work_orders');
     res.json(filtered[0]);
   } catch (err) {

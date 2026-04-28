@@ -474,9 +474,11 @@ router.patch('/column-groups/:id/rename-key', authenticate, authorize(['ADMIN'])
         AND kcu.column_name = 'group_key'
       LIMIT 1
     `);
-    const fkName: string | null = fkResult.rows.length > 0
+    const rawFkName: string | null = fkResult.rows.length > 0
       ? (fkResult.rows[0] as any).constraint_name
       : null;
+    const FK_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    const fkName = rawFkName && FK_NAME_REGEX.test(rawFkName) ? rawFkName : null;
 
     await db.transaction(async (tx) => {
       // Drop FK if it exists so we can update the parent key freely
@@ -584,6 +586,11 @@ router.post('/columns', authenticate, authorize(['ADMIN']), async (req, res) => 
     }
     if (!colData.columnKey) {
       return res.status(400).json({ error: 'columnKey is required' });
+    }
+
+    const COL_KEY_REGEX = /^[a-z][a-z0-9_]*$/;
+    if (!COL_KEY_REGEX.test(colData.columnKey)) {
+      return res.status(400).json({ error: 'columnKey: أحرف إنجليزية صغيرة وأرقام وشرطة سفلية فقط' });
     }
 
     const coreCols = ['id', 'work_type', 'order_number', 'client', 'assignment_date', 'location', 'project_type', 'station', 'length', 'consultant', 'survey_date', 'coordination_date', 'coordination_cert_number', 'notes', 'drilling_team', 'drilling_date', 'shutdown_date', 'procedure', 'hold_reason', 'material_sheet_date', 'check_sheets_date', 'metering_sheet_date', 'gis_completion_date', 'proc_155_close_date', 'completion_cert_confirm', 'estimated_value', 'invoice_number', 'actual_invoice_value', 'invoice_type', 'invoice_1', 'invoice_2', 'collected_amount', 'remaining_amount'];
