@@ -352,6 +352,9 @@ function buildWoPayload(
     const camelKey = toCamel(physKey);
     const val = typeof rawVal === 'string' ? rawVal.trim() : rawVal;
 
+    // Skip empty cells — do not overwrite existing DB values with null
+    if (val === '' || val === null || val === undefined) continue;
+
     let converted: any;
     if (physKey === 'sector_id') {
       converted = sectorMap.get(String(val).toLowerCase()) ?? null;
@@ -403,19 +406,25 @@ router.post('/work_orders/preview', authenticate, adminOnly, upload.single('file
     if (!rows.length) return res.status(400).json({ error: 'الملف فارغ' });
 
     const { allCatalog } = await getLookups();
-    const existing = await db.select({ orderNumber: workOrders.orderNumber }).from(workOrders);
-    const existingSet = new Set(existing.map(r => (r.orderNumber || '').trim().toLowerCase()));
+    const existingResult = await pool.query(`SELECT order_number, work_type FROM work_orders WHERE status != 'CANCELLED'`);
+    const existingSet = new Set(existingResult.rows.map((r: any) =>
+      `${(r.order_number || '').trim().toLowerCase()}|${(r.work_type || '').trim().toLowerCase()}`
+    ));
 
     let insertCount = 0, updateCount = 0;
     const errors: { row: number; message: string }[] = [];
-    const orderNoLabel = (allCatalog as any[]).find((c: any) => c.columnKey === 'order_number')?.labelAr || 'امر العمل';
+    const orderNoLabel  = (allCatalog as any[]).find((c: any) => c.columnKey === 'order_number')?.labelAr || 'امر العمل';
+    const workTypeLabel = (allCatalog as any[]).find((c: any) => c.columnKey === 'work_type')?.labelAr   || 'نوع العمل';
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2;
       const orderNumber = String(row[orderNoLabel] || row['امر العمل'] || row['order_number'] || '').trim();
       if (!orderNumber) { errors.push({ row: rowNum, message: 'رقم الأمر مطلوب' }); continue; }
-      existingSet.has(orderNumber.toLowerCase()) ? updateCount++ : insertCount++;
+      const workType = String(row[workTypeLabel] || row['نوع العمل'] || row['work_type'] || '').trim();
+      if (!workType) { errors.push({ row: rowNum, message: 'نوع العمل مطلوب (المفتاح: رقم الأمر + نوع العمل)' }); continue; }
+      const compositeKey = `${orderNumber.toLowerCase()}|${workType.toLowerCase()}`;
+      existingSet.has(compositeKey) ? updateCount++ : insertCount++;
     }
 
     // Count rows with inline permit data (from main sheet columns)
@@ -448,10 +457,14 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
     const regionMap = new Map<string, string>(allRegions.map((r: any) => [String(r.nameAr || r.name).trim().toLowerCase(), r.id]));
     const stageMapCommit = new Map<string, string>((allStages as any[]).map((s: any) => [String(s.nameAr || '').trim().toLowerCase(), s.id]));
 
-    const existing = await db.select({ id: workOrders.id, orderNumber: workOrders.orderNumber }).from(workOrders);
-    const existingMap = new Map(existing.map(r => [(r.orderNumber || '').trim().toLowerCase(), r.id]));
+    const existingResult = await pool.query(`SELECT id, order_number, work_type FROM work_orders WHERE status != 'CANCELLED'`);
+    const existingMap = new Map(existingResult.rows.map((r: any) => [
+      `${(r.order_number || '').trim().toLowerCase()}|${(r.work_type || '').trim().toLowerCase()}`,
+      r.id as string,
+    ]));
 
-    const orderNoLabel = (allCatalog as any[]).find((c: any) => c.columnKey === 'order_number')?.labelAr || 'امر العمل';
+    const orderNoLabel  = (allCatalog as any[]).find((c: any) => c.columnKey === 'order_number')?.labelAr || 'امر العمل';
+    const workTypeLabel = (allCatalog as any[]).find((c: any) => c.columnKey === 'work_type')?.labelAr   || 'نوع العمل';
 
     let inserted = 0, updated = 0, failed = 0;
     let permitInserted = 0;
@@ -474,6 +487,8 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
         try {
           const orderNumber = String(row[orderNoLabel] || row['امر العمل'] || row['order_number'] || '').trim();
           if (!orderNumber) { errors.push({ row: rowNum, message: 'رقم الأمر مطلوب' }); failed++; continue; }
+          const workType = String(row[workTypeLabel] || row['نوع العمل'] || row['work_type'] || '').trim();
+          if (!workType) { errors.push({ row: rowNum, message: 'نوع العمل مطلوب (المفتاح: رقم الأمر + نوع العمل)' }); failed++; continue; }
 
           const rawPayload = buildWoPayload(row, allCatalog as any[], optMap, allColOpts as any[], sectorMap, regionMap, stageMapCommit);
           const { __dynamicFields: dynamicPayload, __customFields: customPayload, ...corePayload } = rawPayload;
@@ -501,7 +516,8 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
           }
 
           let woId: string | null = null;
-          const existingId = existingMap.get(orderNumber.toLowerCase());
+          const compositeKey = `${orderNumber.toLowerCase()}|${workType.toLowerCase()}`;
+          const existingId = existingMap.get(compositeKey);
           if (existingId) {
             const [existing] = await tx.select({ customFields: workOrders.customFields })
               .from(workOrders).where(eq(workOrders.id, existingId));

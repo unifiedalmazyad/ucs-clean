@@ -165,6 +165,17 @@ function ModuleCard({ module, onRunsRefresh }: { module: 'work_orders' | 'users'
       </div>
 
       <div className="p-6 space-y-5">
+        {/* Composite-key note for work orders */}
+        {module === 'work_orders' && (
+          <div className="flex items-start gap-2 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-4 py-3 rounded-xl">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              <strong>المفتاح المركّب:</strong> رقم الأمر + نوع العمل معاً يحددان السجل.
+              الخلايا الفارغة في الملف لن تمسح البيانات الموجودة — فقط الأعمدة التي تحتوي قيمة ستُحدَّث.
+            </span>
+          </div>
+        )}
+
         {/* File Drop Zone */}
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-2">رفع ملف Excel</label>
