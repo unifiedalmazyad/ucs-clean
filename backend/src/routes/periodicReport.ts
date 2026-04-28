@@ -477,11 +477,14 @@ function aggregateCounts(
   return r;
 }
 
-// ── KPI alerts: مغلقة لم تُفوتر + فُوتر بلا شهادة إنجاز ─────────────────────
-function computeKpiAlerts(wos: any[], stageMap: Map<string, any>): {
+// ── KPI alerts: مغلقة لم تُفوتر + فُوتر بلا شهادة إنجاز + غير الممسوحة + غير المنسقة ──
+interface PendingAlert { count: number; avgDays: number | null; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null; }
+
+function computeKpiAlerts(wos: any[], stageMap: Map<string, any>, metrics: any[] = [], now: Date = new Date()): {
   closedNotInvoiced: number; invoicedNoCert: number;
   closedNotInvoicedValue: number; invoicedNoCertValue: number;
   completedWithCert: number; completedWithCertValue: number;
+  unSurveyed: PendingAlert; unCoordinated: PendingAlert;
 } {
   let closedNotInvoiced      = 0;
   let invoicedNoCert         = 0;
@@ -489,6 +492,15 @@ function computeKpiAlerts(wos: any[], stageMap: Map<string, any>): {
   let invoicedNoCertValue    = 0;
   let completedWithCert      = 0;
   let completedWithCertValue = 0;
+
+  // SLA thresholds from matching metrics, or safe fallbacks
+  const surveyMetric = metrics.find((m: any) => m.startColumnKey === 'assignment_date' && m.endColumnKey === 'survey_date');
+  const coordMetric  = metrics.find((m: any) => m.startColumnKey === 'survey_date'     && m.endColumnKey === 'coordination_date');
+  const surveyThreshold = (surveyMetric?.thresholdDays ?? 1) as number;
+  const coordThreshold  = (coordMetric?.thresholdDays  ?? 9) as number;
+
+  let unSurveyedDaysTotal = 0, unSurveyedCount = 0;
+  let unCoordDaysTotal    = 0, unCoordCount    = 0;
 
   for (const wo of wos) {
     const hasProc155    = !!(wo.proc155CloseDate);
@@ -500,22 +512,19 @@ function computeKpiAlerts(wos: any[], stageMap: Map<string, any>): {
     const isPartial     = invType === 'جزئي';
     const isFinal       = invType === 'نهائي';
 
-    // شروط "مغلقة لم تُفوتر":
-    // 1. إجراء 155 موجود  2. ليست ملغية  3. قيمة م.1 = صفر
+    // شروط "مغلقة لم تُفوتر" — لا تغيير
     if (hasProc155 && !isCancelled && inv1Val <= 0) {
       closedNotInvoiced++;
       closedNotInvoicedValue += parseFloat(wo.estimatedValue ?? wo.estimated_value ?? '0') || 0;
     }
 
-    // شروط "مفوتر ولم يصدر له شهادة إنجاز":
-    // جزئي فقط + إجراء 155 + شهادة غير مؤكدة + م.1 موجود + م.2 فارغ
+    // شروط "مفوتر ولم يصدر له شهادة إنجاز" — لا تغيير
     if (hasProc155 && isPartial && !certConfirmed && inv1Val > 0 && inv2Val <= 0) {
       invoicedNoCert++;
       invoicedNoCertValue += inv1Val;
     }
 
-    // شروط "شهادات الإنجاز المكتملة":
-    // إجراء 155 + شهادة مؤكدة + (جزئي: م.1 وم.2 موجودتان / نهائي: م.1 موجودة)
+    // شروط "شهادات الإنجاز المكتملة" — لا تغيير
     const isCertComplete =
       hasProc155 && certConfirmed &&
       ((isPartial && inv1Val > 0 && inv2Val > 0) || (isFinal && inv1Val > 0));
@@ -523,9 +532,39 @@ function computeKpiAlerts(wos: any[], stageMap: Map<string, any>): {
       completedWithCert++;
       completedWithCertValue += isPartial ? (inv1Val + inv2Val) : inv1Val;
     }
+
+    // شروط "غير الممسوحة": assignment_date موجود + survey_date = null + ليست ملغية
+    const assignDate = wo.assignmentDate ?? wo.assignment_date;
+    const surveyDate = wo.surveyDate ?? wo.survey_date;
+    if (assignDate && !surveyDate && !isCancelled) {
+      const days = (now.getTime() - new Date(assignDate).getTime()) / 86_400_000;
+      if (days >= 0) { unSurveyedDaysTotal += days; unSurveyedCount++; }
+    }
+
+    // شروط "غير المنسقة": survey_date موجود + coordination_date = null + ليست ملغية
+    const coordDate = wo.coordinationDate ?? wo.coordination_date;
+    if (surveyDate && !coordDate && !isCancelled) {
+      const days = (now.getTime() - new Date(surveyDate).getTime()) / 86_400_000;
+      if (days >= 0) { unCoordDaysTotal += days; unCoordCount++; }
+    }
   }
 
-  return { closedNotInvoiced, invoicedNoCert, closedNotInvoicedValue, invoicedNoCertValue, completedWithCert, completedWithCertValue };
+  const buildPendingAlert = (count: number, totalDays: number, threshold: number): PendingAlert => {
+    const avgDays = count > 0 ? Math.round(totalDays / count) : null;
+    let statusColor: PendingAlert['statusColor'] = null;
+    if (avgDays !== null) {
+      if (avgDays > threshold)       statusColor = 'red';
+      else if (avgDays > threshold * 0.8) statusColor = 'amber';
+      else statusColor = 'green';
+    }
+    return { count, avgDays, thresholdDays: threshold, statusColor };
+  };
+
+  return {
+    closedNotInvoiced, invoicedNoCert, closedNotInvoicedValue, invoicedNoCertValue, completedWithCert, completedWithCertValue,
+    unSurveyed:    buildPendingAlert(unSurveyedCount, unSurveyedDaysTotal, surveyThreshold),
+    unCoordinated: buildPendingAlert(unCoordCount,    unCoordDaysTotal,    coordThreshold),
+  };
 }
 
 function computeBillingCounts(wos: any[]): { partialBilled: number; notFullyBilled: number } {
@@ -743,7 +782,7 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
       completed: counts.finCompleted,
     } : null;
 
-    const kpiAlerts = computeKpiAlerts(wos, stageMap);
+    const kpiAlerts = computeKpiAlerts(wos, stageMap, metrics, now);
 
     res.json({
       ...counts,
@@ -1206,6 +1245,128 @@ router.get('/kpi-alerts/partial-billed-orders', authenticate, async (req: AuthRe
   } catch (err) {
     console.error('[KPI DRILL-DOWN partial-billed-orders]', err);
     res.status(500).json({ error: 'Failed to fetch drill-down data' });
+  }
+});
+
+// ── 3g. GET /kpi-alerts/pending-survey ───────────────────────────────────────
+// Work orders with assignment_date set but survey_date missing (not cancelled).
+
+router.get('/kpi-alerts/pending-survey', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+
+    const [{ settings, stageMap, metrics }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId    = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+    const now = new Date();
+
+    const surveyMetric = metrics.find((m: any) => m.startColumnKey === 'assignment_date' && m.endColumnKey === 'survey_date');
+    const threshold = (surveyMetric?.thresholdDays ?? 1) as number;
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    const regionMapPS = new Map<string, { nameAr: string | null; sectorId: string | null }>(allRegions.map((r: any) => [r.id, { nameAr: r.nameAr as string | null, sectorId: r.sectorId as string | null }]));
+    const sectorMapPS = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
+
+    const rows: any[] = [];
+    for (const wo of wos) {
+      const isCancelled = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
+      if (isCancelled) continue;
+      const assignDate = wo.assignmentDate ?? (wo as any).assignment_date;
+      const surveyDate = wo.surveyDate ?? (wo as any).survey_date;
+      if (!assignDate || surveyDate) continue;
+
+      const days = Math.round((now.getTime() - new Date(assignDate).getTime()) / 86_400_000);
+      if (days < 0) continue;
+
+      const region = wo.regionId ? regionMapPS.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMapPS.get(region.sectorId) : null;
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      let statusColor: 'red' | 'amber' | 'green' = days > threshold ? 'red' : days > threshold * 0.8 ? 'amber' : 'green';
+      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null, metricDays: days, thresholdDays: threshold, statusColor });
+    }
+
+    const filtered = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    const safeRows = filtered.map((r: any, i: number) => ({
+      ...r, regionNameAr: rows[i].regionNameAr, sectorNameAr: rows[i].sectorNameAr,
+      metricDays: rows[i].metricDays, thresholdDays: rows[i].thresholdDays, statusColor: rows[i].statusColor,
+    }));
+
+    res.json({ rows: safeRows, count: safeRows.length, thresholdDays: threshold });
+  } catch (err) {
+    console.error('[KPI pending-survey]', err);
+    res.status(500).json({ error: 'Failed to fetch pending survey orders' });
+  }
+});
+
+// ── 3h. GET /kpi-alerts/pending-coordination ──────────────────────────────────
+// Work orders with survey_date set but coordination_date missing (not cancelled).
+
+router.get('/kpi-alerts/pending-coordination', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = await getUserScope(req.user!.id);
+    if (!scope.canViewPeriodicReport) return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
+
+    const [{ settings, stageMap, metrics }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
+    const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
+    const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
+    const regionId    = scope.regionId ?? (req.query.regionId as string | undefined) ?? null;
+    const projectType = (req.query.projectType as string | undefined) || null;
+
+    const wos = await fetchWOs({ sectorId, regionId, projectType, from, to, dateBasisType, dateBasisColumnKey, physicalKeyMap });
+    const now = new Date();
+
+    const coordMetric = metrics.find((m: any) => m.startColumnKey === 'survey_date' && m.endColumnKey === 'coordination_date');
+    const threshold = (coordMetric?.thresholdDays ?? 9) as number;
+
+    const [allRegions, allSectors] = await Promise.all([
+      db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
+      db.select({ id: sectors.id, nameAr: sectors.nameAr }).from(sectors),
+    ]);
+    const regionMapPC = new Map<string, { nameAr: string | null; sectorId: string | null }>(allRegions.map((r: any) => [r.id, { nameAr: r.nameAr as string | null, sectorId: r.sectorId as string | null }]));
+    const sectorMapPC = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
+
+    const rows: any[] = [];
+    for (const wo of wos) {
+      const isCancelled = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
+      if (isCancelled) continue;
+      const surveyDate = wo.surveyDate ?? (wo as any).survey_date;
+      const coordDate  = wo.coordinationDate ?? (wo as any).coordination_date;
+      if (!surveyDate || coordDate) continue;
+
+      const days = Math.round((now.getTime() - new Date(surveyDate).getTime()) / 86_400_000);
+      if (days < 0) continue;
+
+      const region = wo.regionId ? regionMapPC.get(wo.regionId) : null;
+      const sectorNameAr = region?.sectorId ? sectorMapPC.get(region.sectorId) : null;
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
+      let statusColor: 'red' | 'amber' | 'green' = days > threshold ? 'red' : days > threshold * 0.8 ? 'amber' : 'green';
+      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null, metricDays: days, thresholdDays: threshold, statusColor });
+    }
+
+    const filtered = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    const safeRows = filtered.map((r: any, i: number) => ({
+      ...r, regionNameAr: rows[i].regionNameAr, sectorNameAr: rows[i].sectorNameAr,
+      metricDays: rows[i].metricDays, thresholdDays: rows[i].thresholdDays, statusColor: rows[i].statusColor,
+    }));
+
+    res.json({ rows: safeRows, count: safeRows.length, thresholdDays: threshold });
+  } catch (err) {
+    console.error('[KPI pending-coordination]', err);
+    res.status(500).json({ error: 'Failed to fetch pending coordination orders' });
   }
 });
 

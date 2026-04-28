@@ -75,7 +75,8 @@ interface Config {
   userScope: { sectorId: string | null; regionId: string | null; role: string };
 }
 interface FinSumCounts { total: number; completed: number; overdue: number; warning: number; onTime: number; }
-interface KpiAlerts { closedNotInvoiced: number; invoicedNoCert: number; closedNotInvoicedValue: number; invoicedNoCertValue: number; completedWithCert?: number; completedWithCertValue?: number; }
+interface PendingAlert { count: number; avgDays: number | null; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null; }
+interface KpiAlerts { closedNotInvoiced: number; invoicedNoCert: number; closedNotInvoicedValue: number; invoicedNoCertValue: number; completedWithCert?: number; completedWithCertValue?: number; unSurveyed?: PendingAlert; unCoordinated?: PendingAlert; }
 interface ExecBreakdown { overdue: number; warning: number; onTime: number; completed: number; }
 interface Summary {
   total: number; active: number; completed: number;
@@ -1127,6 +1128,22 @@ export default function PeriodicKpiReport() {
   ]);
   const billingDrawerAvailCols: KpiCol[] = useMemo(() => kdBaseCols, [kdBaseCols]);
 
+  // Pending survey drawer
+  const [pendingSurveyDrawer, setPendingSurveyDrawer] = useState<{ rows: any[]; loading: boolean } | null>(null);
+  const [pendingSurveyColKeys, setPendingSurveyColKeys] = useState<string[]>([
+    'orderNumber', 'workType', 'sectorNameAr', 'regionNameAr', 'projectType', 'assignmentDate', 'surveyDate', 'coordinationDate', 'metricDays',
+  ]);
+  const KD_THRESHOLD: KpiCol = { key: 'thresholdDays', labelAr: 'الحد (يوم)', labelEn: 'SLA (d)', dataType: 'integer', virtual: true };
+  const KD_STATUS_BADGE: KpiCol = { key: 'statusColor', labelAr: 'حالة التجاوز', labelEn: 'Status', dataType: 'text', virtual: true };
+  const pendingSurveyAvailCols: KpiCol[] = useMemo(() => [...kdBaseCols, KD_METRIC_DAYS, KD_THRESHOLD, KD_STATUS_BADGE], [kdBaseCols]);
+
+  // Pending coordination drawer
+  const [pendingCoordDrawer, setPendingCoordDrawer] = useState<{ rows: any[]; loading: boolean } | null>(null);
+  const [pendingCoordColKeys, setPendingCoordColKeys] = useState<string[]>([
+    'orderNumber', 'workType', 'sectorNameAr', 'regionNameAr', 'projectType', 'assignmentDate', 'surveyDate', 'coordinationDate', 'metricDays',
+  ]);
+  const pendingCoordAvailCols: KpiCol[] = useMemo(() => [...kdBaseCols, KD_METRIC_DAYS, KD_THRESHOLD, KD_STATUS_BADGE], [kdBaseCols]);
+
   // ── Helper: build common query params from appliedFilters ───────────────
   const buildKdParams = useCallback((af: typeof appliedFilters) => {
     if (!af) return null;
@@ -1186,6 +1203,34 @@ export default function PeriodicKpiReport() {
     } catch (e) {
       console.error(e);
       setBillingDrawer({ type, rows: [], loading: false });
+    }
+  }, [appliedFilters, buildKdParams]);
+
+  // ── Open: pending survey drawer ─────────────────────────────────────────
+  const openPendingSurveyDrawer = useCallback(async () => {
+    if (!appliedFilters) return;
+    setPendingSurveyDrawer({ rows: [], loading: true });
+    try {
+      const p = buildKdParams(appliedFilters)!;
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/pending-survey?${p}`);
+      setPendingSurveyDrawer({ rows: res.data.rows ?? [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setPendingSurveyDrawer({ rows: [], loading: false });
+    }
+  }, [appliedFilters, buildKdParams]);
+
+  // ── Open: pending coordination drawer ───────────────────────────────────
+  const openPendingCoordDrawer = useCallback(async () => {
+    if (!appliedFilters) return;
+    setPendingCoordDrawer({ rows: [], loading: true });
+    try {
+      const p = buildKdParams(appliedFilters)!;
+      const res = await api.get(`/reports/periodic-kpis/kpi-alerts/pending-coordination?${p}`);
+      setPendingCoordDrawer({ rows: res.data.rows ?? [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setPendingCoordDrawer({ rows: [], loading: false });
     }
   }, [appliedFilters, buildKdParams]);
 
@@ -1936,6 +1981,20 @@ export default function PeriodicKpiReport() {
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
                         {dateDiff.map(m => <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>)}
+                        {/* كرت: غير الممسوحة */}
+                        {summary.kpiAlerts?.unSurveyed && summary.kpiAlerts.unSurveyed.count > 0 && (
+                          <div><MetricCard
+                            m={{ code: 'PENDING_SURVEY', nameAr: 'غير الممسوحة', nameEn: 'Unsurveyed', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unSurveyed.avgDays, totalDays: 0, count: summary.kpiAlerts.unSurveyed.count, thresholdDays: summary.kpiAlerts.unSurveyed.thresholdDays, statusColor: summary.kpiAlerts.unSurveyed.statusColor }}
+                            onClick={openPendingSurveyDrawer}
+                          /></div>
+                        )}
+                        {/* كرت: غير المنسقة */}
+                        {summary.kpiAlerts?.unCoordinated && summary.kpiAlerts.unCoordinated.count > 0 && (
+                          <div><MetricCard
+                            m={{ code: 'PENDING_COORD', nameAr: 'غير المنسقة', nameEn: 'Uncoordinated', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unCoordinated.avgDays, totalDays: 0, count: summary.kpiAlerts.unCoordinated.count, thresholdDays: summary.kpiAlerts.unCoordinated.thresholdDays, statusColor: summary.kpiAlerts.unCoordinated.statusColor }}
+                            onClick={openPendingCoordDrawer}
+                          /></div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -3059,6 +3118,68 @@ export default function PeriodicKpiReport() {
         onColKeysChange={setMetricDrawerColKeys}
         lang={lang}
         reportHeader={reportHdr ?? undefined}
+      />
+
+      {/* ── Pending Survey Drawer ────────────────────────────────────────────── */}
+      <KpiDrawer
+        open={!!pendingSurveyDrawer}
+        onClose={() => setPendingSurveyDrawer(null)}
+        title="أوامر العمل غير الممسوحة"
+        titleEn="Unsurveyed Work Orders"
+        icon={Clock}
+        iconColorCls="text-amber-500"
+        rows={pendingSurveyDrawer?.rows ?? []}
+        loading={pendingSurveyDrawer?.loading ?? false}
+        availableCols={pendingSurveyAvailCols}
+        colKeys={pendingSurveyColKeys}
+        onColKeysChange={setPendingSurveyColKeys}
+        lang={lang}
+        reportHeader={reportHdr ?? undefined}
+        renderCell={(row, col) => {
+          if (col.key === 'statusColor') {
+            const c = row.statusColor;
+            if (!c) return null;
+            const map: Record<string, { ar: string; en: string; cls: string }> = {
+              red:   { ar: 'متأخر',  en: 'Overdue',   cls: 'bg-red-100 text-red-700' },
+              amber: { ar: 'تنبيه',  en: 'Warning',   cls: 'bg-amber-100 text-amber-700' },
+              green: { ar: 'منتظم',  en: 'On Track',  cls: 'bg-emerald-100 text-emerald-700' },
+            };
+            const l = map[c];
+            return l ? <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${l.cls}`}>{lang === 'en' ? l.en : l.ar}</span> : null;
+          }
+          return null;
+        }}
+      />
+
+      {/* ── Pending Coordination Drawer ───────────────────────────────────────── */}
+      <KpiDrawer
+        open={!!pendingCoordDrawer}
+        onClose={() => setPendingCoordDrawer(null)}
+        title="أوامر العمل غير المنسقة"
+        titleEn="Uncoordinated Work Orders"
+        icon={Clock}
+        iconColorCls="text-indigo-500"
+        rows={pendingCoordDrawer?.rows ?? []}
+        loading={pendingCoordDrawer?.loading ?? false}
+        availableCols={pendingCoordAvailCols}
+        colKeys={pendingCoordColKeys}
+        onColKeysChange={setPendingCoordColKeys}
+        lang={lang}
+        reportHeader={reportHdr ?? undefined}
+        renderCell={(row, col) => {
+          if (col.key === 'statusColor') {
+            const c = row.statusColor;
+            if (!c) return null;
+            const map: Record<string, { ar: string; en: string; cls: string }> = {
+              red:   { ar: 'متأخر',  en: 'Overdue',   cls: 'bg-red-100 text-red-700' },
+              amber: { ar: 'تنبيه',  en: 'Warning',   cls: 'bg-amber-100 text-amber-700' },
+              green: { ar: 'منتظم',  en: 'On Track',  cls: 'bg-emerald-100 text-emerald-700' },
+            };
+            const l = map[c];
+            return l ? <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${l.cls}`}>{lang === 'en' ? l.en : l.ar}</span> : null;
+          }
+          return null;
+        }}
       />
 
       {/* ── Billing Drawer ───────────────────────────────────────────────────── */}
