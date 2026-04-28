@@ -270,7 +270,15 @@ async function startServer() {
     });
 
     if (!adminExists) {
-      const password = process.env.ADMIN_DEFAULT_PASSWORD || 'admin123';
+      const password = process.env.ADMIN_DEFAULT_PASSWORD;
+      if (!password) {
+        if (_IS_PROD) {
+          console.error('[FATAL] Admin user does not exist and ADMIN_DEFAULT_PASSWORD is not set. Refusing to seed a weak password in production.');
+          process.exit(1);
+        }
+        console.warn('[SECURITY] ADMIN_DEFAULT_PASSWORD not set — skipping admin seed in dev. Set it to create the admin user.');
+        return;
+      }
       const hash = await bcrypt.hash(password, 10);
       await db.insert(users).values({
         username: 'admin',

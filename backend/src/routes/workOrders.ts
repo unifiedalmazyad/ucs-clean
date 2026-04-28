@@ -224,15 +224,17 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
     if (!order) return res.status(404).json({ error: 'Not found' });
 
     // Enforce region/sector scope — mirrors the check in /:id/edit-context
-    const scope = await getUserScope(req.user!.id);
-    const orderAny = order as any;
-    if (scope.scopeType === 'OWN_REGION' && scope.regionId &&
-        (orderAny.regionId ?? orderAny.region_id) !== scope.regionId) {
-      return res.status(403).json({ error: 'Access denied: outside your region' });
-    }
-    if (scope.scopeType === 'OWN_SECTOR' && scope.sectorId &&
-        (orderAny.sectorId ?? orderAny.sector_id) !== scope.sectorId) {
-      return res.status(403).json({ error: 'Access denied: outside your sector' });
+    if (req.user!.role !== 'ADMIN') {
+      const scope = await getUserScope(req.user!.id, req.user!.role);
+      const orderAny = order as any;
+      if (scope.scopeType === 'OWN_REGION' && scope.regionId &&
+          (orderAny.regionId ?? orderAny.region_id) !== scope.regionId) {
+        return res.status(403).json({ error: 'Access denied: outside your region' });
+      }
+      if (scope.scopeType === 'OWN_SECTOR' && scope.sectorId &&
+          (orderAny.sectorId ?? orderAny.sector_id) !== scope.sectorId) {
+        return res.status(403).json({ error: 'Access denied: outside your sector' });
+      }
     }
 
     const filtered = await filterOutput([order], req.user!.id, req.user!.role, 'work_orders');
@@ -339,7 +341,8 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
 async function updateDynamicCols(id: string, dynamic: Record<string, any>) {
   if (!pool) return;
   const ISO_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
-  const entries = Object.entries(dynamic).filter(([, v]) => v !== undefined);
+  const COL_KEY_RE = /^[a-z][a-z0-9_]*$/;
+  const entries = Object.entries(dynamic).filter(([k, v]) => v !== undefined && COL_KEY_RE.test(k));
   if (!entries.length) return;
 
   // Build: col1 = $2, col2 = $3, ...
@@ -379,6 +382,20 @@ router.put('/:id', authenticate, async (req: AuthRequest, res) => {
     });
 
     if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    // Enforce region/sector scope — prevent editing orders outside the user's scope
+    if (req.user!.role !== 'ADMIN') {
+      const scope = await getUserScope(req.user!.id, req.user!.role);
+      const existingAny = existing as any;
+      if (scope.scopeType === 'OWN_REGION' && scope.regionId &&
+          (existingAny.regionId ?? existingAny.region_id) !== scope.regionId) {
+        return res.status(403).json({ error: 'Access denied: outside your region' });
+      }
+      if (scope.scopeType === 'OWN_SECTOR' && scope.sectorId &&
+          (existingAny.sectorId ?? existingAny.sector_id) !== scope.sectorId) {
+        return res.status(403).json({ error: 'Access denied: outside your sector' });
+      }
+    }
 
     const { coreFiltered, dynamicFiltered } = await filterInput(req.body, req.user!.id, req.user!.role, 'work_orders');
 
