@@ -734,7 +734,7 @@ router.get('/export/users', authenticate, adminOnly, async (_req, res) => {
 // ────────────────────────────────────────────────────────────────────────────
 router.get('/export/work_orders', authenticate, adminOnly, async (_req, res) => {
   try {
-    const { allCatalog } = await getLookups();
+    const { allCatalog, allSectors, allRegions, allStages } = await getLookups();
     // Use raw SQL (SELECT *) so physical columns added via ALTER TABLE (not in Drizzle schema) are included
     const allWosResult = await pool.query('SELECT * FROM work_orders ORDER BY created_at ASC');
     const allWos: Record<string, any>[] = allWosResult.rows;
@@ -746,6 +746,11 @@ router.get('/export/work_orders', authenticate, adminOnly, async (_req, res) => 
     for (const p of [...allPerms].reverse()) {
       if (!latestPermitMap.has(p.workOrderId)) latestPermitMap.set(p.workOrderId, p);
     }
+
+    // FK resolution maps: UUID → Arabic name
+    const sectorMap = new Map<string, string>(allSectors.map((s: any) => [s.id, s.nameAr || s.name || '']));
+    const regionMap = new Map<string, string>(allRegions.map((r: any) => [r.id, r.nameAr || r.name || '']));
+    const stageMap  = new Map<string, string>((allStages as any[]).map((s: any) => [s.id, s.nameAr || '']));
 
     // All catalog columns are now physical — include all of them in the export
     const woCols = allCatalog as any[];
@@ -765,6 +770,10 @@ router.get('/export/work_orders', authenticate, adminOnly, async (_req, res) => 
         // Check camelCase (Drizzle ORM result) then snake_case (raw SQL SELECT * result) then customFields fallback
         let val = (wo as any)[camel] ?? (wo as any)[physKey] ?? (wo.customFields?.[physKey] ?? '');
         if (val instanceof Date) val = val.toISOString().slice(0, 10);
+        // Resolve FK UUIDs → Arabic names
+        if (physKey === 'sector_id' && val) val = sectorMap.get(val) ?? val;
+        else if (physKey === 'region_id' && val) val = regionMap.get(val) ?? val;
+        else if (physKey === 'stage_id'  && val) val = stageMap.get(val)  ?? val;
         return val ?? '';
       });
       const perm = latestPermitMap.get(wo.id);
