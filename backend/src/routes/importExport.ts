@@ -357,9 +357,13 @@ function buildWoPayload(
 
     let converted: any;
     if (physKey === 'sector_id') {
-      converted = sectorMap.get(String(val).toLowerCase()) ?? null;
+      const id = sectorMap.get(String(val).toLowerCase());
+      if (!id) throw new Error(`القطاع غير معرّف في النظام: "${val}"`);
+      converted = id;
     } else if (physKey === 'region_id') {
-      converted = regionMap.get(String(val).toLowerCase()) ?? null;
+      const id = regionMap.get(String(val).toLowerCase());
+      if (!id) throw new Error(`المنطقة غير معرّفة في النظام: "${val}"`);
+      converted = id;
     } else if (catEntry.dataType === 'date' || catEntry.dataType === 'timestamp') {
       converted = parseDate(val);
     } else if (catEntry.dataType === 'currency' || catEntry.dataType === 'number' || catEntry.dataType === 'numeric') {
@@ -378,11 +382,10 @@ function buildWoPayload(
     // - otherwise → dynamicFields (raw SQL UPDATE after Drizzle op)
     if (DRIZZLE_WO_COLS.has(camelKey)) {
       payload[camelKey] = converted;
-      // When procedure (stage name) is set, also resolve stageId so the stage
-      // dropdown in the edit form shows the correct value.
       if (physKey === 'procedure' && converted && stageMap) {
         const stageId = stageMap.get(String(converted).trim().toLowerCase());
-        if (stageId) payload['stageId'] = stageId;
+        if (!stageId) throw new Error(`المرحلة غير معرّفة في النظام: "${converted}"`);
+        payload['stageId'] = stageId;
       }
     } else {
       dynamicFields[physKey] = converted;
@@ -477,19 +480,23 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
       return isNaN(d.getTime()) ? null : d;
     };
 
-    // Collect dynamic-column updates to run AFTER the transaction (avoids pool deadlock)
-    const pendingDynamic: { woId: string; dynamicPayload: Record<string, any> }[] = [];
+    const ISO_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
 
-    await db.transaction(async (tx) => {
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const rowNum = i + 2;
-        try {
-          const orderNumber = String(row[orderNoLabel] || row['امر العمل'] || row['order_number'] || '').trim();
-          if (!orderNumber) { errors.push({ row: rowNum, message: 'رقم الأمر مطلوب' }); failed++; continue; }
-          const workType = String(row[workTypeLabel] || row['نوع العمل'] || row['work_type'] || '').trim();
-          if (!workType) { errors.push({ row: rowNum, message: 'نوع العمل مطلوب (المفتاح: رقم الأمر + نوع العمل)' }); failed++; continue; }
+    // Each row gets its own transaction — a single row failure never aborts the rest
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
 
+      // Validate required fields before entering transaction
+      const orderNumber = String(row[orderNoLabel] || row['امر العمل'] || row['order_number'] || '').trim();
+      if (!orderNumber) { errors.push({ row: rowNum, message: 'رقم الأمر مطلوب' }); failed++; continue; }
+      const workType = String(row[workTypeLabel] || row['نوع العمل'] || row['work_type'] || '').trim();
+      if (!workType) { errors.push({ row: rowNum, message: 'نوع العمل مطلوب (المفتاح: رقم الأمر + نوع العمل)' }); failed++; continue; }
+
+      let rowDynamic: { woId: string; payload: Record<string, any> } | null = null;
+
+      try {
+        await db.transaction(async (tx) => {
           const rawPayload = buildWoPayload(row, allCatalog as any[], optMap, allColOpts as any[], sectorMap, regionMap, stageMapCommit);
           const { __dynamicFields: dynamicPayload, __customFields: customPayload, ...corePayload } = rawPayload;
           corePayload.orderNumber = orderNumber;
@@ -538,11 +545,6 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
             inserted++;
           }
 
-          // Queue dynamic physical columns — executed AFTER transaction to avoid pool deadlock
-          if (woId && dynamicPayload && Object.keys(dynamicPayload).length > 0) {
-            pendingDynamic.push({ woId, dynamicPayload });
-          }
-
           // ── Handle inline permit data (from same row columns) ──────────────
           const permitNo    = String(row['رقم التصريح'] || '').trim();
           const permitStart = String(row['تاريخ بداية التصريح (YYYY-MM-DD)'] || row['تاريخ بداية التصريح'] || '').trim();
@@ -566,27 +568,31 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
             }
             permitInserted++;
           }
-        } catch (rowErr: any) {
-          errors.push({ row: rowNum, message: rowErr?.message || 'خطأ غير محدد' });
-          failed++;
-        }
-      }
-    });
 
-    // Execute dynamic physical-column updates now that the transaction has released its connection
-    if (pool && pendingDynamic.length > 0) {
-      const ISO_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
-      for (const { woId, dynamicPayload } of pendingDynamic) {
-        const entries = Object.entries(dynamicPayload).filter(([, v]) => v !== undefined);
-        if (!entries.length) continue;
-        const setClauses = entries.map(([k], i) => `"${k}" = $${i + 2}`).join(', ');
-        const vals = entries.map(([, v]) => {
-          if (typeof v === 'string' && ISO_RE.test(v)) {
-            const d = new Date(v); return isNaN(d.getTime()) ? v : d;
+          // Capture dynamic payload — executed after tx commits (avoids pool deadlock)
+          if (woId && dynamicPayload && Object.keys(dynamicPayload).length > 0) {
+            rowDynamic = { woId, payload: dynamicPayload };
           }
-          return v;
         });
-        await pool.query(`UPDATE work_orders SET ${setClauses} WHERE id = $1`, [woId, ...vals]);
+
+        // Execute dynamic physical-column updates for this row after its transaction commits
+        if (rowDynamic) {
+          const { woId, payload: dynPayload } = rowDynamic as { woId: string; payload: Record<string, any> };
+          const entries = Object.entries(dynPayload).filter(([, v]) => v !== undefined);
+          if (entries.length > 0) {
+            const setClauses = entries.map(([k], idx) => `"${k}" = $${idx + 2}`).join(', ');
+            const vals = entries.map(([, v]) => {
+              if (typeof v === 'string' && ISO_RE.test(v)) {
+                const d = new Date(v); return isNaN(d.getTime()) ? v : d;
+              }
+              return v;
+            });
+            await pool.query(`UPDATE work_orders SET ${setClauses} WHERE id = $1`, [woId, ...vals]);
+          }
+        }
+      } catch (rowErr: any) {
+        errors.push({ row: rowNum, message: rowErr?.message || 'خطأ غير محدد' });
+        failed++;
       }
     }
 
