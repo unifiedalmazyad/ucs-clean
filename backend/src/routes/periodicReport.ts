@@ -478,7 +478,7 @@ function aggregateCounts(
 }
 
 // ── KPI alerts: مغلقة لم تُفوتر + فُوتر بلا شهادة إنجاز ─────────────────────
-function computeKpiAlerts(wos: any[]): {
+function computeKpiAlerts(wos: any[], stageMap: Map<string, any>): {
   closedNotInvoiced: number; invoicedNoCert: number;
   closedNotInvoicedValue: number; invoicedNoCertValue: number;
   completedWithCert: number; completedWithCertValue: number;
@@ -492,7 +492,7 @@ function computeKpiAlerts(wos: any[]): {
 
   for (const wo of wos) {
     const hasProc155    = !!(wo.proc155CloseDate);
-    const isCancelled   = (wo.status ?? '').toUpperCase() === 'CANCELLED';
+    const isCancelled   = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
     const inv1Val       = parseFloat(wo.invoice1 ?? wo.invoice_1 ?? '0') || 0;
     const inv2Val       = parseFloat(wo.invoice2 ?? wo.invoice_2 ?? '0') || 0;
     const certConfirmed = wo.completionCertConfirm === true || wo.completionCertConfirm === 't';
@@ -743,7 +743,7 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
       completed: counts.finCompleted,
     } : null;
 
-    const kpiAlerts = computeKpiAlerts(wos);
+    const kpiAlerts = computeKpiAlerts(wos, stageMap);
 
     res.json({
       ...counts,
@@ -772,7 +772,7 @@ router.get('/kpi-alerts/closed-not-invoiced', authenticate, async (req: AuthRequ
     if (!scope.canViewPeriodicReport) {
       return res.status(403).json({ error: 'Access denied: Periodic Report permission required' });
     }
-    const [{ settings }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
+    const [{ settings, stageMap }, physicalKeyMap] = await Promise.all([loadKpiConfig(), loadPhysicalKeyMap()]);
     const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
     const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
     const sectorId = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
@@ -795,7 +795,7 @@ router.get('/kpi-alerts/closed-not-invoiced', authenticate, async (req: AuthRequ
     const rows: any[] = [];
     for (const wo of wos) {
       const hasProc155  = !!(wo.proc155CloseDate);
-      const isCancelled = (wo.status ?? '').toUpperCase() === 'CANCELLED';
+      const isCancelled = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
       const invType     = wo.invoiceType ?? (wo as any).invoice_type;
       const inv1Val     = parseFloat(wo.invoice1 as any ?? '0') || 0;
 

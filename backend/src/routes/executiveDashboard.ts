@@ -90,6 +90,10 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     const terminalStageIds = new Set(
       allStages.filter(s => s.isTerminal || (s as any).isCancelled).map(s => s.id)
     );
+    // Cancelled-only set — used to exclude cancelled orders from financial aggregations
+    const cancelledStageIds = new Set(
+      allStages.filter((s: any) => s.isCancelled).map((s: any) => s.id)
+    );
 
     // Compute KPI status counts using KPI service (exec vs fin, separated)
     // Resolve which sector IDs and region ID to filter on — mirror exactly what scopeFilters does
@@ -181,8 +185,12 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
 
     allWorkOrders.forEach(order => {
       const orderAny = order as any;
+
+      // Skip cancelled orders from all financial aggregations and counts
+      if (cancelledStageIds.has(orderAny.stageId)) return;
+
       const assignmentDate = orderAny.assignmentDate ? new Date(orderAny.assignmentDate) : null;
-      
+
       // Financial
       const est  = Number(orderAny.estimatedValue || 0);
       const inv1 = Number(orderAny.invoice1 ?? orderAny.invoice_1 ?? 0) || 0;
@@ -397,6 +405,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     const periodSectorFinMap: Record<string, { estimated: number; invoiced: number; collected: number; completed: number; total: number }> = {};
     allWorkOrders.forEach(order => {
       const o = order as any;
+      if (cancelledStageIds.has(o.stageId)) return;
       if (!o.sectorId) return;
       const aDate = o.assignmentDate ? new Date(o.assignmentDate) : null;
       if (!aDate || aDate < start || aDate > end) return; // فلتر التاريخ

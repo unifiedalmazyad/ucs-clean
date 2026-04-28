@@ -31,6 +31,7 @@ const STATUS_OPTIONS = [
   { value: 'COMPLETED_LATE', label: 'منجز متأخر',  labelEn: 'Late Done'  },
   { value: 'CLOSED',         label: 'مغلق',        labelEn: 'Closed'     },
   { value: 'NONE',           label: 'بدون بيانات', labelEn: 'No data'    },
+  { value: 'CANCELLED',      label: 'ملغي',        labelEn: 'Cancelled'  },
 ];
 
 function StatusBadge({ status }: { status: string }) {

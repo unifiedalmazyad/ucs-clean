@@ -212,6 +212,8 @@ router.get('/data', authenticate, async (req: AuthRequest, res) => {
       if (filterExecSet.size   > 0 && !filterExecSet.has(execStatus))     continue;
       if (filterFinSet.size    > 0 && !filterFinSet.has(finStatus))       continue;
       if (filterOverallSet.size > 0 && !filterOverallSet.has(overallStatus)) continue;
+      // Cancelled orders are hidden by default — only shown when user explicitly filters by CANCELLED
+      if (filterExecSet.size === 0 && execStatus === 'CANCELLED') continue;
 
       // ── Flatten order into camelCase flat object ──────────────────────────
       const flat: Record<string, any> = {};
