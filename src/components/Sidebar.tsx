@@ -13,6 +13,16 @@ import { useLang } from '../contexts/LangContext';
 import { useTheme } from '../contexts/ThemeContext';
 import type { TranslationKey } from '../i18n';
 
+function setFavicon(url: string) {
+  let link = document.querySelector<HTMLLinkElement>("link[rel='icon']");
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'icon';
+    document.head.appendChild(link);
+  }
+  link.href = url || '';
+}
+
 export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
@@ -26,14 +36,18 @@ export default function Sidebar() {
   // Load sidebar logo from report-header (accessible to all authenticated users)
   useEffect(() => {
     api.get('/admin/report-header').then(res => {
-      setSidebarLogoUrl(res.data?.sidebarLogoUrl ?? '');
+      const url = res.data?.sidebarLogoUrl ?? '';
+      setSidebarLogoUrl(url);
+      setFavicon(url);
     }).catch(() => {});
   }, []);
 
   // Live update when admin uploads/removes sidebar logo from SystemSettings
   useEffect(() => {
     const handler = (e: Event) => {
-      setSidebarLogoUrl((e as CustomEvent<{ url: string }>).detail.url);
+      const url = (e as CustomEvent<{ url: string }>).detail.url;
+      setSidebarLogoUrl(url);
+      setFavicon(url);
     };
     window.addEventListener('sidebar-logo-changed', handler);
     return () => window.removeEventListener('sidebar-logo-changed', handler);

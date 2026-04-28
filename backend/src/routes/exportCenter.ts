@@ -1,4 +1,4 @@
-import express, { Response } from 'express';
+﻿import express, { Response } from 'express';
 import * as XLSX from 'xlsx';
 import { db } from '../db';
 import {
@@ -275,9 +275,9 @@ async function resolveAuditLogsForXlsx(rawRows: any[]): Promise<any[]> {
   }));
 }
 
-/** Entry point: dispatch to the correct resolver for XLSX format. */
+/** Entry point: dispatch to the correct resolver (used for both XLSX and CSV). */
 async function resolveForXlsx(dataset: string, rawRows: any[]): Promise<any[]> {
-  if (dataset === 'work_orders') return resolveWorkOrdersForXlsx(rawRows);
+  if (dataset === 'work_orders' || dataset === 'cancelled_work_orders') return resolveWorkOrdersForXlsx(rawRows);
   if (dataset === 'users')       return resolveUsersForXlsx(rawRows);
   if (dataset === 'audit_logs')  return resolveAuditLogsForXlsx(rawRows);
   return rawRows;
@@ -355,19 +355,19 @@ router.get('/export/:dataset', authenticate, requireAdmin, async (req: AuthReque
     const def = DATASETS.find(d => d.key === dataset)!;
     const filename = `${dataset}_${new Date().toISOString().slice(0, 10)}`;
 
+    // Resolve FK IDs to Arabic names for all formats (XLSX and CSV)
+    const readable = await resolveForXlsx(dataset, rows);
+
     if (format === 'xlsx') {
-      // Resolve FK IDs → human-readable names and use Arabic column headers
-      const readable = await resolveForXlsx(dataset, rows);
       const buf = toXlsx(readable, def.nameAr);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
       res.send(buf);
     } else {
-      // CSV stays raw (IDs and technical fields as-is) for system use
-      const csv = toCsv(rows);
+      const csv = toCsv(readable);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
-      res.send('\uFEFF' + csv); // UTF-8 BOM for proper Arabic display in Excel
+      res.send('﻿' + csv); // UTF-8 BOM for proper Arabic display in Excel
     }
   } catch (err) {
     console.error('[EXPORT CENTER EXPORT]', err);

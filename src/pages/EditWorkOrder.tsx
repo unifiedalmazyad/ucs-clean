@@ -52,6 +52,7 @@ function formatVal(v: any, colKey?: string, options?: any[]): string {
       }
     }
   }
+  if (typeof v === 'object') return '(بيانات محدّثة)';
   return String(v);
 }
 

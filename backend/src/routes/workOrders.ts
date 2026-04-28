@@ -542,7 +542,7 @@ router.get('/:id/history', authenticate, async (req: AuthRequest, res) => {
         const changes = log.changes as any;
         const before = changes.before ?? {};
         const after = changes.after ?? {};
-        const SKIP = new Set(['updatedAt', 'updated_at', 'updatedBy', 'updated_by', 'createdAt', 'created_at', 'id']);
+        const SKIP = new Set(['updatedAt', 'updated_at', 'updatedBy', 'updated_by', 'createdAt', 'created_at', 'id', 'customFields', 'attachments']);
         for (const key of Object.keys(after)) {
           if (SKIP.has(key)) continue;
           const bVal = before[key];
