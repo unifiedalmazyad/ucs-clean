@@ -312,7 +312,8 @@ function buildWoPayload(
   allColOpts: any[],
   sectorMap: Map<string, string>,
   regionMap: Map<string, string>,
-  stageMap?: Map<string, string>, // stage nameAr (lowercase) → stage UUID
+  stageMap?: Map<string, string>,
+  rowWarnings?: string[],
 ): Record<string, any> {
   const payload: Record<string, any> = {};
 
@@ -328,11 +329,15 @@ function buildWoPayload(
     optValueMap[o.columnKey].set((o.labelAr || o.value).trim(), o.value);
   }
 
-  const parseDate = (v: any): Date | null => {
+  const parseDate = (v: any, fieldLabel?: string): Date | null => {
     if (!v) return null;
-    if (v instanceof Date) return v;
-    const d = new Date(String(v));
-    return isNaN(d.getTime()) ? null : d;
+    const d = v instanceof Date ? v : new Date(String(v));
+    if (isNaN(d.getTime())) return null;
+    if (d.getFullYear() < 1900 || d.getFullYear() > 2100) {
+      if (fieldLabel) rowWarnings?.push(`تاريخ غير صالح في عمود "${fieldLabel}": ${String(v).slice(0, 10)} — تم تجاهله`);
+      return null;
+    }
+    return d;
   };
   const toNum = (v: any): number | null => {
     const n = parseFloat(String(v).replace(/,/g, ''));
@@ -365,7 +370,7 @@ function buildWoPayload(
       if (!id) throw new Error(`المنطقة غير معرّفة في النظام: "${val}"`);
       converted = id;
     } else if (catEntry.dataType === 'date' || catEntry.dataType === 'timestamp') {
-      converted = parseDate(val);
+      converted = parseDate(val, catEntry.labelAr);
     } else if (catEntry.dataType === 'currency' || catEntry.dataType === 'number' || catEntry.dataType === 'numeric') {
       converted = toNum(val);
     } else if (catEntry.dataType === 'boolean') {
@@ -471,13 +476,15 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
 
     let inserted = 0, updated = 0, failed = 0;
     let permitInserted = 0;
-    const errors: { row: number; message: string }[] = [];
+    const errors:   { row: number; message: string }[] = [];
+    const warnings: { row: number; message: string }[] = [];
 
     const parseDate = (v: any): Date | null => {
       if (!v || String(v).trim() === '') return null;
-      if (v instanceof Date) return v;
-      const d = new Date(String(v));
-      return isNaN(d.getTime()) ? null : d;
+      const d = v instanceof Date ? v : new Date(String(v));
+      if (isNaN(d.getTime())) return null;
+      if (d.getFullYear() < 1900 || d.getFullYear() > 2100) return null;
+      return d;
     };
 
     const ISO_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
@@ -494,10 +501,11 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
       if (!workType) { errors.push({ row: rowNum, message: 'نوع العمل مطلوب (المفتاح: رقم الأمر + نوع العمل)' }); failed++; continue; }
 
       let rowDynamic: { woId: string; payload: Record<string, any> } | null = null;
+      const rowWarnings: string[] = [];
 
       try {
         await db.transaction(async (tx) => {
-          const rawPayload = buildWoPayload(row, allCatalog as any[], optMap, allColOpts as any[], sectorMap, regionMap, stageMapCommit);
+          const rawPayload = buildWoPayload(row, allCatalog as any[], optMap, allColOpts as any[], sectorMap, regionMap, stageMapCommit, rowWarnings);
           const { __dynamicFields: dynamicPayload, __customFields: customPayload, ...corePayload } = rawPayload;
           corePayload.orderNumber = orderNumber;
           corePayload.updatedAt   = new Date();
@@ -590,6 +598,7 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
             await pool.query(`UPDATE work_orders SET ${setClauses} WHERE id = $1`, [woId, ...vals]);
           }
         }
+        for (const w of rowWarnings) warnings.push({ row: rowNum, message: w });
       } catch (rowErr: any) {
         errors.push({ row: rowNum, message: rowErr?.message || 'خطأ غير محدد' });
         failed++;
@@ -602,7 +611,7 @@ router.post('/work_orders/commit', authenticate, adminOnly, upload.single('file'
       inserted, updated, failed, errorsJson: errors,
     });
 
-    res.json({ inserted, updated, failed, errors, permitInserted, permitFailed: 0, permitErrors: [] });
+    res.json({ inserted, updated, failed, errors, warnings, permitInserted, permitFailed: 0, permitErrors: [] });
   } catch (err) {
     console.error('[COMMIT WO ERROR]', err);
     res.status(500).json({ error: 'فشل في استيراد البيانات' });

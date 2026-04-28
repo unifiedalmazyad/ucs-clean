@@ -23,6 +23,7 @@ interface CommitResult {
   updated: number;
   failed: number;
   errors: { row: number; message: string }[];
+  warnings?: { row: number; message: string }[];
   note?: string;
   permitInserted?: number;
   permitFailed?: number;
@@ -327,6 +328,21 @@ function ModuleCard({ module, onRunsRefresh }: { module: 'work_orders' | 'users'
               {commit.permitInserted !== undefined && commit.permitInserted > 0 && (
                 <div className="px-5 py-3 border-t border-emerald-100 bg-amber-50 text-xs text-amber-800">
                   تصاريح الحفر: تم حفظ <strong>{commit.permitInserted}</strong> تصريح مضمّن في أوامر العمل
+                </div>
+              )}
+              {commit.warnings && commit.warnings.length > 0 && (
+                <div className="border-t border-amber-200 bg-amber-50 px-5 py-3 space-y-1">
+                  <p className="text-xs font-semibold text-amber-700 mb-1">
+                    تحذيرات ({commit.warnings.length}) — الصفوف نجحت لكن بعض الحقول تجاهلها النظام:
+                  </p>
+                  <div className="max-h-32 overflow-y-auto space-y-0.5">
+                    {commit.warnings.map((w, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-xs text-amber-800">
+                        <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>صف {w.row}: {w.message}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {commit.note && (
