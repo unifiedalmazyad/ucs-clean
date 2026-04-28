@@ -286,6 +286,47 @@ if (isDemo) {
     `);
   } catch(e) {}
 
+  // Migration: role_definitions table (added after initial schema)
+  try {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS role_definitions (
+        id TEXT PRIMARY KEY,
+        role_key TEXT NOT NULL UNIQUE,
+        name_ar TEXT NOT NULL,
+        name_en TEXT,
+        scope_type TEXT NOT NULL DEFAULT 'ALL',
+        can_create_order INTEGER DEFAULT 0,
+        can_delete_order INTEGER DEFAULT 0,
+        can_edit_execution INTEGER DEFAULT 1,
+        can_view_excavation_permits INTEGER DEFAULT 1,
+        can_edit_excavation_permits INTEGER DEFAULT 0,
+        can_delete_excavation_permits INTEGER DEFAULT 0,
+        can_view_executive_dashboard INTEGER DEFAULT 0,
+        can_view_exec_kpi_cards INTEGER DEFAULT 1,
+        can_view_fin_kpi_cards INTEGER DEFAULT 1,
+        can_manage_targets INTEGER DEFAULT 0,
+        can_view_contracts INTEGER DEFAULT 0,
+        can_manage_contracts INTEGER DEFAULT 0,
+        can_view_periodic_report INTEGER DEFAULT 0,
+        can_manage_users INTEGER DEFAULT 0,
+        is_system INTEGER DEFAULT 0,
+        active INTEGER DEFAULT 1,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT OR IGNORE INTO role_definitions (id, role_key, name_ar, scope_type,
+        can_create_order, can_delete_order, can_edit_execution,
+        can_view_executive_dashboard, can_view_exec_kpi_cards, can_view_fin_kpi_cards,
+        can_manage_targets, can_view_contracts, can_manage_contracts,
+        can_view_periodic_report, can_manage_users, is_system, active, sort_order)
+      VALUES
+        ('role-admin',   'ADMIN',   'مدير النظام',     'ALL', 1,1,1,1,1,1,1,1,1,1,1,1,1,0),
+        ('role-viewer',  'VIEWER',  'مستعرض',          'ALL', 0,0,0,0,1,1,0,0,0,0,0,1,1,1),
+        ('role-editor',  'EDITOR',  'محرر',             'ALL', 1,0,1,0,1,1,0,0,0,0,0,1,1,2),
+        ('role-manager', 'MANAGER', 'مدير',             'ALL', 1,1,1,1,1,1,1,1,1,1,0,1,1,3);
+    `);
+  } catch(e) {}
+
   console.log("SQLite database initialized.");
 } else {
   console.log("Initializing PostgreSQL database...");

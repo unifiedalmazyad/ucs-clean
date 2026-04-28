@@ -1123,6 +1123,11 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
     const metric = metrics.find((m: any) => m.code === metricCode && m.isEnabled);
     if (!metric) return res.status(404).json({ error: 'Metric not found or disabled' });
 
+    // Parse excluded project types for this metric (mirrors aggregateMetrics logic)
+    const metricExcluded: string[] = (() => {
+      try { return JSON.parse(metric.excludedProjectTypes || '[]'); } catch { return []; }
+    })();
+
     const { from, to } = buildDateRange(req.query.from as string, req.query.to as string, settings.defaultDateRangeMode);
     const { dateBasisType, dateBasisColumnKey } = parseDateBasis(req.query);
     const sectorId    = scope.sectorId ?? (req.query.sectorId as string | undefined) ?? null;
@@ -1147,6 +1152,10 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
       // Cancelled WOs are never included in metric calculations
       const stage = stageMap.get(wo.stageId ?? '');
       if (stage?.isCancelled) continue;
+
+      // Skip project types excluded from this metric
+      const woProjectType = wo.projectType ?? (wo as any).project_type ?? null;
+      if (metricExcluded.length > 0 && woProjectType && metricExcluded.includes(woProjectType)) continue;
 
       const metricDays = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
       if (metricDays === null) continue; // WO has no value for this metric
@@ -1268,6 +1277,9 @@ router.get('/kpi-alerts/pending-survey', authenticate, async (req: AuthRequest, 
 
     const surveyMetric = metrics.find((m: any) => m.startColumnKey === 'assignment_date' && m.endColumnKey === 'survey_date');
     const threshold = (surveyMetric?.thresholdDays ?? 1) as number;
+    const surveyExcluded: string[] = (() => {
+      try { return JSON.parse(surveyMetric?.excludedProjectTypes || '[]'); } catch { return []; }
+    })();
 
     const [allRegions, allSectors] = await Promise.all([
       db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
@@ -1280,6 +1292,8 @@ router.get('/kpi-alerts/pending-survey', authenticate, async (req: AuthRequest, 
     for (const wo of wos) {
       const isCancelled = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
       if (isCancelled) continue;
+      const woProjectType = wo.projectType ?? (wo as any).project_type ?? null;
+      if (surveyExcluded.length > 0 && woProjectType && surveyExcluded.includes(woProjectType)) continue;
       const assignDate = wo.assignmentDate ?? (wo as any).assignment_date;
       const surveyDate = wo.surveyDate ?? (wo as any).survey_date;
       if (!assignDate || surveyDate) continue;
@@ -1329,6 +1343,9 @@ router.get('/kpi-alerts/pending-coordination', authenticate, async (req: AuthReq
 
     const coordMetric = metrics.find((m: any) => m.startColumnKey === 'survey_date' && m.endColumnKey === 'coordination_date');
     const threshold = (coordMetric?.thresholdDays ?? 9) as number;
+    const coordExcluded: string[] = (() => {
+      try { return JSON.parse(coordMetric?.excludedProjectTypes || '[]'); } catch { return []; }
+    })();
 
     const [allRegions, allSectors] = await Promise.all([
       db.select({ id: regions.id, nameAr: regions.nameAr, sectorId: regions.sectorId }).from(regions),
@@ -1341,6 +1358,8 @@ router.get('/kpi-alerts/pending-coordination', authenticate, async (req: AuthReq
     for (const wo of wos) {
       const isCancelled = stageMap.get(wo.stageId ?? '')?.isCancelled === true;
       if (isCancelled) continue;
+      const woProjectType = wo.projectType ?? (wo as any).project_type ?? null;
+      if (coordExcluded.length > 0 && woProjectType && coordExcluded.includes(woProjectType)) continue;
       const surveyDate = wo.surveyDate ?? (wo as any).survey_date;
       const coordDate  = wo.coordinationDate ?? (wo as any).coordination_date;
       if (!surveyDate || coordDate) continue;

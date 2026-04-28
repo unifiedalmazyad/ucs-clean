@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { X, SlidersHorizontal, Download, FileText, RefreshCw } from 'lucide-react';
+import type ExcelJS from 'exceljs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -226,9 +227,10 @@ export default function KpiDrawer({
   }, [rows, totalKey, totalValue]);
 
   const handleExcel = async () => {
+    try {
     const ExcelJS = (await import('exceljs')).default;
     const wb = new ExcelJS.Workbook();
-    const sheetName = (isAr ? title : (titleEn ?? title)).slice(0, 31);
+    const sheetName = (isAr ? title : (titleEn ?? title)).replace(/[*?:\\/\[\]]/g, '').slice(0, 31);
     const ws = wb.addWorksheet(sheetName);
     ws.views = [{ rightToLeft: isAr }];
     const nc = visibleCols.length;
@@ -322,6 +324,11 @@ export default function KpiDrawer({
     });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    } catch (err) {
+      console.error('[KpiDrawer] Excel export failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      alert((isAr ? 'فشل تصدير Excel:\n' : 'Excel export failed:\n') + msg);
+    }
   };
 
   const handlePdf = () => {

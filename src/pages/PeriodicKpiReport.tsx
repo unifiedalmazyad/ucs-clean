@@ -1979,22 +1979,26 @@ export default function PeriodicKpiReport() {
                         <Clock className="w-3.5 h-3.5 text-indigo-400" />
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Performance Time Averages' : 'متوسطات الأداء الزمنية'}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
-                        {dateDiff.map(m => <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>)}
-                        {/* كرت: غير الممسوحة */}
-                        {summary.kpiAlerts?.unSurveyed && summary.kpiAlerts.unSurveyed.count > 0 && (
-                          <div><MetricCard
-                            m={{ code: 'PENDING_SURVEY', nameAr: 'غير الممسوحة', nameEn: 'Unsurveyed', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unSurveyed.avgDays, totalDays: 0, count: summary.kpiAlerts.unSurveyed.count, thresholdDays: summary.kpiAlerts.unSurveyed.thresholdDays, statusColor: summary.kpiAlerts.unSurveyed.statusColor }}
-                            onClick={openPendingSurveyDrawer}
-                          /></div>
-                        )}
-                        {/* كرت: غير المنسقة */}
-                        {summary.kpiAlerts?.unCoordinated && summary.kpiAlerts.unCoordinated.count > 0 && (
-                          <div><MetricCard
-                            m={{ code: 'PENDING_COORD', nameAr: 'غير المنسقة', nameEn: 'Uncoordinated', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unCoordinated.avgDays, totalDays: 0, count: summary.kpiAlerts.unCoordinated.count, thresholdDays: summary.kpiAlerts.unCoordinated.thresholdDays, statusColor: summary.kpiAlerts.unCoordinated.statusColor }}
-                            onClick={openPendingCoordDrawer}
-                          /></div>
-                        )}
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 items-stretch">
+                        {(() => {
+                          const cards: React.ReactElement[] = [];
+                          for (const m of dateDiff) {
+                            cards.push(<div key={m.code}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>);
+                            if (m.code === 'SURVEY' && summary.kpiAlerts?.unSurveyed && summary.kpiAlerts.unSurveyed.count > 0) {
+                              cards.push(<div key="PENDING_SURVEY"><MetricCard
+                                m={{ code: 'PENDING_SURVEY', nameAr: 'غير الممسوحة', nameEn: 'Unsurveyed', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unSurveyed.avgDays, totalDays: 0, count: summary.kpiAlerts.unSurveyed.count, thresholdDays: summary.kpiAlerts.unSurveyed.thresholdDays, statusColor: summary.kpiAlerts.unSurveyed.statusColor }}
+                                onClick={openPendingSurveyDrawer}
+                              /></div>);
+                            }
+                            if (m.code === 'COORDINATION' && summary.kpiAlerts?.unCoordinated && summary.kpiAlerts.unCoordinated.count > 0) {
+                              cards.push(<div key="PENDING_COORD"><MetricCard
+                                m={{ code: 'PENDING_COORD', nameAr: 'غير المنسقة', nameEn: 'Uncoordinated', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unCoordinated.avgDays, totalDays: 0, count: summary.kpiAlerts.unCoordinated.count, thresholdDays: summary.kpiAlerts.unCoordinated.thresholdDays, statusColor: summary.kpiAlerts.unCoordinated.statusColor }}
+                                onClick={openPendingCoordDrawer}
+                              /></div>);
+                            }
+                          }
+                          return cards;
+                        })()}
                       </div>
                     </div>
                   )}
