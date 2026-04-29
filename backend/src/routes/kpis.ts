@@ -6,7 +6,7 @@ import {
   computeDashboardKpiForOrder,
 } from '../services/kpiService';
 import { db } from '../db';
-import { workOrders, users, regions, sectors, columnOptions, stages, kpiRules, kpiTemplates, roleDefinitions, columnCatalog } from '../db/schema';
+import { workOrders, users, regions, sectors, columnOptions, stages, kpiRules, kpiTemplates, roleDefinitions, columnCatalog, roleColumnPermissions } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 
 async function getScopeInfo(userId: string, roleKey: string) {
@@ -61,19 +61,35 @@ router.get('/report', authenticate, async (req: AuthRequest, res) => {
 
     const allOrders: any[] = await query;
 
-    // Pre-fetch DASHBOARD rules + stage map once (reused for all orders)
-    const dashboardRules = await db.select({ rule: kpiRules, template: kpiTemplates })
-      .from(kpiRules)
-      .innerJoin(kpiTemplates, eq(kpiRules.templateId, kpiTemplates.id))
-      .where(and(eq(kpiRules.active, true), eq(kpiTemplates.displayScope, 'DASHBOARD')));
-    const allStages = await db.select().from(stages);
-    const stageMap  = new Map<string, any>(allStages.map(s => [s.id, s]));
+    // Pre-fetch all shared KPI data once — prevents N×5 queries inside the loop
+    const [dashboardRules, orderRules, allStages, allColKeys] = await Promise.all([
+      db.select({ rule: kpiRules, template: kpiTemplates })
+        .from(kpiRules)
+        .innerJoin(kpiTemplates, eq(kpiRules.templateId, kpiTemplates.id))
+        .where(and(eq(kpiRules.active, true), eq(kpiTemplates.displayScope, 'DASHBOARD'))),
+      db.select({ rule: kpiRules, template: kpiTemplates })
+        .from(kpiRules)
+        .innerJoin(kpiTemplates, eq(kpiRules.templateId, kpiTemplates.id))
+        .where(and(eq(kpiRules.active, true), eq(kpiTemplates.displayScope, 'ORDER'))),
+      db.select().from(stages),
+      db.select({ columnKey: columnCatalog.columnKey, physicalKey: (columnCatalog as any).physicalKey }).from(columnCatalog),
+    ]);
 
-    // Build columnKey → physicalKey map so renamed columns still resolve correctly in KPI
-    const allColKeys = await db.select({ columnKey: columnCatalog.columnKey, physicalKey: (columnCatalog as any).physicalKey }).from(columnCatalog);
+    const stageMap = new Map<string, any>(allStages.map((s: any) => [s.id, s]));
     const physicalKeyMap = new Map<string, string>(
       allColKeys.filter((c: any) => c.physicalKey).map((c: any) => [c.columnKey, c.physicalKey as string])
     );
+
+    // Pre-fetch column permissions once for this role (same for all orders in this request)
+    let readableColumns: Set<string>;
+    if (user.role === 'ADMIN') {
+      readableColumns = new Set(['*']);
+    } else {
+      const perms = await db.select()
+        .from(roleColumnPermissions)
+        .where(and(eq((roleColumnPermissions as any).role, user.role), eq((roleColumnPermissions as any).canRead, true)));
+      readableColumns = new Set(perms.map((p: any) => p.columnKey));
+    }
 
     // Compute KPIs for each order, apply workType + status filters
     const reportRows: any[] = [];
@@ -81,7 +97,13 @@ router.get('/report', authenticate, async (req: AuthRequest, res) => {
     for (const order of allOrders) {
       if (filterProjectType && order.projectType !== filterProjectType) continue;
 
-      const kpis = await computeWorkOrderKpis(order.id, user.role);
+      const kpis = await computeWorkOrderKpis(order.id, user.role, {
+        wo: order,
+        physicalKeyMap,
+        stageMap,
+        orderRules,
+        readableColumns,
+      });
       const overdueKpis = kpis.filter(k => k.status === 'OVERDUE');
       const warnKpis    = kpis.filter(k => k.status === 'WARN');
       const worstStatus = overdueKpis.length > 0 ? 'OVERDUE'
@@ -288,7 +310,7 @@ router.get('/date-constraints/:workOrderId', authenticate, async (req, res) => {
       physicalKey: (columnCatalog as any).physicalKey
     }).from(columnCatalog);
     const toPhysical = (key: string): string => {
-      const entry = colCatalog.find(c => c.columnKey === key);
+      const entry = colCatalog.find((c: any) => c.columnKey === key);
       return (entry?.physicalKey as string | null) ?? key;
     };
 
@@ -307,20 +329,20 @@ router.get('/date-constraints/:workOrderId', authenticate, async (req, res) => {
     ));
 
     // Filter by project type: include global rules + rules for this project type
-    const applicable = allRules.filter(r =>
+    const applicable = allRules.filter((r: any) =>
       !r.workTypeFilter || r.workTypeFilter === projectType
     );
 
     // Deduplicate by (startCol, endCol) — keep unique pairs
     const seen = new Set<string>();
     const constraints = applicable
-      .filter(r => r.startColumnKey && r.endColumnKey)
-      .map(r => ({
+      .filter((r: any) => r.startColumnKey && r.endColumnKey)
+      .map((r: any) => ({
         startCol: toPhysical(r.startColumnKey!),
         endCol:   toPhysical(r.endColumnKey!),
         labelAr:  r.labelAr,
       }))
-      .filter(r => {
+      .filter((r: any) => {
         const k = `${r.startCol}|${r.endCol}`;
         if (seen.has(k)) return false;
         seen.add(k);

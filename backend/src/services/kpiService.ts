@@ -62,28 +62,54 @@ function getWoField(wo: any, columnKey: string, physicalKeyMap?: Map<string, str
   return undefined;
 }
 
-export async function computeWorkOrderKpis(workOrderId: string, userRole: string): Promise<KpiResult[]> {
-  const [wo] = await db.select().from(workOrders).where(eq(workOrders.id, workOrderId));
-  if (!wo) return [];
+interface KpiPrefetch {
+  wo?: any;
+  physicalKeyMap?: Map<string, string>;
+  stageMap?: Map<string, any>;
+  orderRules?: Array<{ rule: any; template: any }>;
+  readableColumns?: Set<string>;
+}
 
-  // Build columnKey → physicalKey map so renamed columns still resolve correctly
-  const colCatalog = await db.select({ columnKey: columnCatalog.columnKey, physicalKey: (columnCatalog as any).physicalKey }).from(columnCatalog);
-  const physicalKeyMap = new Map<string, string>(
-    colCatalog.filter(c => c.physicalKey).map(c => [c.columnKey, c.physicalKey as string])
-  );
+export async function computeWorkOrderKpis(
+  workOrderId: string,
+  userRole: string,
+  prefetched?: KpiPrefetch,
+): Promise<KpiResult[]> {
+  let wo: any;
+  if (prefetched?.wo) {
+    wo = prefetched.wo;
+  } else {
+    const [fetched] = await db.select().from(workOrders).where(eq(workOrders.id, workOrderId));
+    if (!fetched) return [];
+    wo = fetched;
+  }
 
-  // Load all stages for startMode/endMode='STAGE' resolution
-  const allStages = await db.select().from(stages);
-  const stageMap = new Map<string, any>(allStages.map(s => [s.id, s]));
+  let physicalKeyMap: Map<string, string>;
+  if (prefetched?.physicalKeyMap) {
+    physicalKeyMap = prefetched.physicalKeyMap;
+  } else {
+    const colCatalog = await db.select({ columnKey: columnCatalog.columnKey, physicalKey: (columnCatalog as any).physicalKey }).from(columnCatalog);
+    physicalKeyMap = new Map(colCatalog.filter(c => c.physicalKey).map(c => [c.columnKey, c.physicalKey as string]));
+  }
+
+  let stageMap: Map<string, any>;
+  if (prefetched?.stageMap) {
+    stageMap = prefetched.stageMap;
+  } else {
+    const allStages = await db.select().from(stages);
+    stageMap = new Map(allStages.map(s => [s.id, s]));
+  }
   const currentStage: any = wo.stageId ? stageMap.get(wo.stageId) : null;
 
-  const rules = await db.select({
-    rule: kpiRules,
-    template: kpiTemplates
-  })
-  .from(kpiRules)
-  .innerJoin(kpiTemplates, eq(kpiRules.templateId, kpiTemplates.id))
-  .where(and(eq(kpiRules.active, true), eq(kpiTemplates.displayScope, 'ORDER')));
+  let rules: Array<{ rule: any; template: any }>;
+  if (prefetched?.orderRules) {
+    rules = prefetched.orderRules;
+  } else {
+    rules = await db.select({ rule: kpiRules, template: kpiTemplates })
+      .from(kpiRules)
+      .innerJoin(kpiTemplates, eq(kpiRules.templateId, kpiTemplates.id))
+      .where(and(eq(kpiRules.active, true), eq(kpiTemplates.displayScope, 'ORDER')));
+  }
 
   const woProjectType = getWoField(wo, 'project_type') ?? getWoField(wo, 'projectType');
   const applicableRules = rules.filter(({ rule }) => {
@@ -92,7 +118,9 @@ export async function computeWorkOrderKpis(workOrderId: string, userRole: string
   });
 
   let readableColumns: Set<string>;
-  if (userRole === 'ADMIN') {
+  if (prefetched?.readableColumns) {
+    readableColumns = prefetched.readableColumns;
+  } else if (userRole === 'ADMIN') {
     readableColumns = new Set(['*']);
   } else {
     const permissions = await db.select()
