@@ -2009,41 +2009,57 @@ export default function PeriodicKpiReport() {
                         <BarChart2 className="w-3.5 h-3.5 text-violet-400" />
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Quantity Indicators' : 'مؤشرات كمية'}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-stretch">
+                      <div className="grid grid-cols-3 gap-4 items-stretch">
                         {numericAgg.map(m => {
                           // SUM metrics with split data → render two length cards
                           if (m.aggFunction === 'SUM' && m.activeTotal != null && m.completedTotal != null) {
                             const fmtLen = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 1 });
-                            const activeName   = lang === 'en' ? 'Incomplete Length (m)' : 'إجمالي الأطوال غير المنجزة';
-                            const completedName = lang === 'en' ? 'Completed Length (m)' : 'إجمالي الأطوال المكتملة';
+                            const activeName    = lang === 'en' ? 'Incomplete Length (m)' : 'إجمالي الأطوال غير المنجزة';
+                            const completedName = lang === 'en' ? 'Completed Length (m)'  : 'إجمالي الأطوال المكتملة';
                             return (
                               <React.Fragment key={m.code}>
+                                {/* غير المنجزة — no proc155 */}
                                 <div>
                                   <button
                                     onClick={() => openMetricDrawer(m.code, activeName, lang === 'en' ? 'Incomplete Length' : null, 'active')}
-                                    className="w-full text-right rounded-xl border border-amber-200 bg-white shadow-sm p-4 flex flex-col gap-1 h-full cursor-pointer hover:ring-2 hover:ring-amber-300 transition-shadow"
+                                    className="w-full text-right rounded-xl border border-indigo-200 bg-white shadow-sm p-4 flex flex-col gap-1.5 h-full cursor-pointer hover:ring-2 hover:ring-indigo-300 transition-shadow hover:shadow-md"
                                   >
                                     <div className="flex items-center justify-between">
-                                      <span className="text-xs font-medium text-slate-500">{activeName}</span>
-                                      <BarChart2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                                      <span className="text-xs font-semibold text-slate-600">{activeName}</span>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        {/* ! tooltip — no proc155 date */}
+                                        <span className="relative group">
+                                          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 bg-slate-100 text-slate-500 text-[10px] font-bold cursor-help leading-none">!</span>
+                                          <span className="pointer-events-none absolute z-50 bottom-full mb-2 right-0 w-60 bg-slate-800 text-white text-[11px] leading-snug rounded-lg px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl whitespace-normal" dir="rtl">
+                                            {lang === 'en' ? 'Orders without a procedure 155 date' : 'تعني أن أمر العمل لا يحتوي على تاريخ إجراء 155'}
+                                            <span className="absolute top-full right-2 border-4 border-transparent border-t-slate-800" />
+                                          </span>
+                                        </span>
+                                        <BarChart2 className="w-3.5 h-3.5 text-indigo-300" />
+                                      </div>
                                     </div>
-                                    <div className="text-2xl font-bold text-amber-700">{fmtLen(m.activeTotal)}</div>
-                                    <div className="text-xs text-amber-500 font-medium px-2 py-0.5 rounded-full bg-amber-50 self-start">{lang === 'en' ? 'proc.155 absent' : 'بدون إجراء 155'}</div>
+                                    <div className="text-2xl font-bold text-indigo-700">{fmtLen(m.activeTotal)}</div>
                                     <div className="text-xs text-slate-400">{m.activeCount ?? 0} {lang === 'en' ? 'orders' : 'أمر'}</div>
+                                    <div className="mt-auto pt-1">
+                                      <span className="text-[10px] text-slate-400 underline underline-offset-2">{lang === 'en' ? 'Click to view details' : 'اضغط لعرض التفاصيل'}</span>
+                                    </div>
                                   </button>
                                 </div>
+                                {/* المكتملة — with proc155 */}
                                 <div>
                                   <button
                                     onClick={() => openMetricDrawer(m.code, completedName, lang === 'en' ? 'Completed Length' : null, 'completed')}
-                                    className="w-full text-right rounded-xl border border-emerald-200 bg-white shadow-sm p-4 flex flex-col gap-1 h-full cursor-pointer hover:ring-2 hover:ring-emerald-300 transition-shadow"
+                                    className="w-full text-right rounded-xl border border-indigo-200 bg-white shadow-sm p-4 flex flex-col gap-1.5 h-full cursor-pointer hover:ring-2 hover:ring-indigo-300 transition-shadow hover:shadow-md"
                                   >
                                     <div className="flex items-center justify-between">
-                                      <span className="text-xs font-medium text-slate-500">{completedName}</span>
-                                      <BarChart2 className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                                      <span className="text-xs font-semibold text-slate-600">{completedName}</span>
+                                      <BarChart2 className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
                                     </div>
-                                    <div className="text-2xl font-bold text-emerald-700">{fmtLen(m.completedTotal)}</div>
-                                    <div className="text-xs text-emerald-500 font-medium px-2 py-0.5 rounded-full bg-emerald-50 self-start">{lang === 'en' ? 'proc.155 present' : 'مع إجراء 155'}</div>
+                                    <div className="text-2xl font-bold text-indigo-700">{fmtLen(m.completedTotal)}</div>
                                     <div className="text-xs text-slate-400">{m.completedCount ?? 0} {lang === 'en' ? 'orders' : 'أمر'}</div>
+                                    <div className="mt-auto pt-1">
+                                      <span className="text-[10px] text-slate-400 underline underline-offset-2">{lang === 'en' ? 'Click to view details' : 'اضغط لعرض التفاصيل'}</span>
+                                    </div>
                                   </button>
                                 </div>
                               </React.Fragment>
