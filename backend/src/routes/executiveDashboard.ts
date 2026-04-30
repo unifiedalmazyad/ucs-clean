@@ -213,6 +213,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
           financial.expectedRemaining += inv1; // proxy: assume inv2 ≈ inv1
         }
         // both invoices exist → +0 (fully invoiced)
+      } else {
+        // no invoiceType → not yet invoiced → full estimated value is remaining
+        financial.expectedRemaining += est;
       }
 
       // الفرق للمفوتر المكتمل (only fully-invoiced orders)
@@ -809,6 +812,9 @@ router.get('/financial-detail', authenticate, async (req: AuthRequest, res) => {
           if      (inv1 === 0) perRowRemaining = est;
           else if (inv2 === 0) perRowRemaining = inv1; // proxy: assume inv2 ≈ inv1
           // both invoices exist → 0 (fully invoiced)
+        } else {
+          // no invoiceType → not yet invoiced → full estimated value is remaining
+          perRowRemaining = est;
         }
         summary.totalRemaining += perRowRemaining;
         if (perRowRemaining > 0) {
