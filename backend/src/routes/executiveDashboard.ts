@@ -221,7 +221,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         (invType === 'جزئي' && inv1 > 0 && inv2 > 0);
       if (isFullyInvoiced) {
         financial.completedEstimated += est;
-        financial.completedInvoiced  += inv1 + inv2;
+        financial.completedInvoiced  += invType === 'نهائي' ? inv1 : (inv1 + inv2);
       }
 
       // TopDelays list (use assignment-date SLA for ranking only, not for counting)
