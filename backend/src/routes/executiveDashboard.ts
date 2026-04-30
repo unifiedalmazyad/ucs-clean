@@ -307,7 +307,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
         financialByRegionMap[rid].collected += Number(orderAny.collectedAmount || 0);
       }
 
-      if (orderAny.stageId) {
+      if (orderAny.stageId && !terminalStageIds.has(orderAny.stageId)) {
         const stid = orderAny.stageId;
         if (!stageBottlenecksMap[stid]) {
           stageBottlenecksMap[stid] = {
