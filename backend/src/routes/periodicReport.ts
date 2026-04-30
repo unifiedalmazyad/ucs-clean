@@ -197,18 +197,21 @@ function computeMetricDays(wo: any, metric: any, stageMap: Map<string, any>, now
   return days >= 0 ? days : null;
 }
 
+// Extract a numeric value from a WO for NUMERIC_AGG metrics
+function resolveNumericValue(wo: any, camelVKey: string, camelPhysVKey: string | null, physVKey: string | null): number {
+  let v = wo[camelVKey];
+  if ((v == null || isNaN(parseFloat(v))) && camelPhysVKey) v = wo[camelPhysVKey] ?? (physVKey ? wo[physVKey] : null);
+  return parseFloat(v);
+}
+
 function computeNumericAgg(wos: any[], metric: any, physicalKeyMap?: Map<string, string>): MetricResult {
-  // Try logical columnKey first, then physicalKey fallback
   const vKey = metric.valueColumnKey ?? '';
   const camelVKey = toCamel(vKey);
-  const physVKey = physicalKeyMap?.get(vKey);
+  const physVKey = physicalKeyMap?.get(vKey) ?? null;
   const camelPhysVKey = physVKey ? toCamel(physVKey) : null;
+
   const values = wos
-    .map(wo => {
-      let v = wo[camelVKey];
-      if ((v == null || isNaN(parseFloat(v))) && camelPhysVKey) v = wo[camelPhysVKey] ?? wo[physVKey!];
-      return parseFloat(v);
-    })
+    .map(wo => resolveNumericValue(wo, camelVKey, camelPhysVKey, physVKey))
     .filter(v => !isNaN(v) && isFinite(v));
 
   let result: number | null = null;
@@ -229,12 +232,31 @@ function computeNumericAgg(wos: any[], metric: any, physicalKeyMap?: Map<string,
     else statusColor = 'green';
   }
 
+  // For SUM metrics: compute split by proc155CloseDate (active vs completed)
+  let activeTotal: number | null = null;
+  let completedTotal: number | null = null;
+  let activeCount = 0;
+  let completedCount = 0;
+  if (metric.aggFunction === 'SUM') {
+    let aSum = 0, cSum = 0;
+    for (const wo of wos) {
+      const v = resolveNumericValue(wo, camelVKey, camelPhysVKey, physVKey);
+      if (isNaN(v) || !isFinite(v)) continue;
+      const hasProc155 = !!(wo.proc155CloseDate ?? wo.proc_155_close_date);
+      if (hasProc155) { cSum += v; completedCount++; }
+      else            { aSum += v; activeCount++; }
+    }
+    activeTotal    = Math.round(aSum * 100) / 100;
+    completedTotal = Math.round(cSum * 100) / 100;
+  }
+
   return {
     code: metric.code, nameAr: metric.nameAr, nameEn: metric.nameEn ?? null,
     metricType: 'NUMERIC_AGG' as const,
     aggFunction: metric.aggFunction ?? null,
     avgDays, totalDays: result ?? 0, count: values.length,
     thresholdDays: metric.thresholdDays ?? null, statusColor,
+    activeTotal, completedTotal, activeCount, completedCount,
   };
 }
 
@@ -244,6 +266,11 @@ export interface MetricResult {
   aggFunction?: string | null;
   avgDays: number | null; totalDays: number; count: number;
   thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null;
+  // Populated for NUMERIC_AGG SUM metrics: split by proc155CloseDate presence
+  activeTotal?: number | null;    // sum for غير منجز: proc155CloseDate IS NULL
+  completedTotal?: number | null; // sum for منجز:    proc155CloseDate IS NOT NULL
+  activeCount?: number;
+  completedCount?: number;
 }
 
 function aggregateMetrics(
@@ -1145,6 +1172,17 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
     for (const r of allRegions) regionMapMO.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
     const sectorMapMO = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
 
+    // 'active'    → include only غير منجز (proc155CloseDate IS NULL)
+    // 'completed' → include only منجز    (proc155CloseDate IS NOT NULL)
+    // 'all'       → no proc155 filter (DATE_DIFF default)
+    const lengthFilter = (req.query.filter as string | undefined) ?? 'all';
+
+    const isNumericAgg = metric.metricType === 'NUMERIC_AGG';
+    const vKey = isNumericAgg ? (metric.valueColumnKey ?? '') : '';
+    const camelVKey = toCamel(vKey);
+    const physVKey  = physicalKeyMap.get(vKey) ?? null;
+    const camelPhysVKey = physVKey ? toCamel(physVKey) : null;
+
     const now = new Date();
     const rows: any[] = [];
 
@@ -1157,8 +1195,23 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
       const woProjectType = wo.projectType ?? (wo as any).project_type ?? null;
       if (metricExcluded.length > 0 && woProjectType && metricExcluded.includes(woProjectType)) continue;
 
-      const metricDays = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
-      if (metricDays === null) continue; // WO has no value for this metric
+      let metricDays: number | null = null;
+
+      if (isNumericAgg) {
+        // NUMERIC_AGG: use valueColumnKey to get the numeric value
+        const rawVal = resolveNumericValue(wo, camelVKey, camelPhysVKey, physVKey);
+        if (isNaN(rawVal) || !isFinite(rawVal)) continue;
+        metricDays = rawVal;
+
+        // Apply proc155 filter for length-split cards
+        const hasProc155 = !!(wo.proc155CloseDate ?? (wo as any).proc_155_close_date);
+        if (lengthFilter === 'active'    &&  hasProc155) continue; // want non-completed only
+        if (lengthFilter === 'completed' && !hasProc155) continue; // want completed only
+      } else {
+        // DATE_DIFF: existing logic
+        metricDays = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
+        if (metricDays === null) continue;
+      }
 
       const region      = wo.regionId ? regionMapMO.get(wo.regionId) : null;
       const sectorNameAr = region?.sectorId ? sectorMapMO.get(region.sectorId) : null;

@@ -63,7 +63,7 @@ interface ReportHeader {
 }
 
 interface DateBasisOption { type: string; labelAr: string; labelEn: string; columnKey: string | null }
-interface MetricResult { code: string; nameAr: string; nameEn?: string; metricType?: 'DATE_DIFF' | 'NUMERIC_AGG'; aggFunction?: string | null; avgDays: number | null; totalDays: number; count: number; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null }
+interface MetricResult { code: string; nameAr: string; nameEn?: string; metricType?: 'DATE_DIFF' | 'NUMERIC_AGG'; aggFunction?: string | null; avgDays: number | null; totalDays: number; count: number; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null; activeTotal?: number | null; completedTotal?: number | null; activeCount?: number; completedCount?: number; }
 interface Config {
   execRules: any[]; finRule: any | null; settings: any | null; stages: any[];
   projectTypes: { value: string; labelAr: string; labelEn?: string }[];
@@ -946,8 +946,8 @@ export default function PeriodicKpiReport() {
     regionId: user.regionId ?? '',
     projectType: '',
     from: '', to: '',
-    dateBasisType: 'CREATED_AT',
-    dateBasisColumnKey: '',
+    dateBasisType: 'COLUMN_DATE',
+    dateBasisColumnKey: 'assignment_date',
   });
   const [appliedFilters, setAppliedFilters] = useState<Filters | null>(null);
 
@@ -1177,12 +1177,13 @@ export default function PeriodicKpiReport() {
   }, [appliedFilters, buildKdParams]);
 
   // ── Open: metric drawer ──────────────────────────────────────────────────
-  const openMetricDrawer = useCallback(async (code: string, nameAr: string, nameEn: string | null) => {
+  const openMetricDrawer = useCallback(async (code: string, nameAr: string, nameEn: string | null, filter?: 'active' | 'completed' | 'all') => {
     if (!appliedFilters) return;
     setMetricDrawer({ code, nameAr, nameEn, rows: [], loading: true });
     try {
       const p = buildKdParams(appliedFilters)!;
       p.set('metricCode', code);
+      if (filter && filter !== 'all') p.set('filter', filter);
       const res = await api.get(`/reports/periodic-kpis/kpi-alerts/metric-orders?${p}`);
       setMetricDrawer({ code, nameAr, nameEn, rows: res.data.rows ?? [], loading: false });
     } catch (e) {
@@ -2009,7 +2010,48 @@ export default function PeriodicKpiReport() {
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Quantity Indicators' : 'مؤشرات كمية'}</span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-stretch">
-                        {numericAgg.map(m => <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>)}
+                        {numericAgg.map(m => {
+                          // SUM metrics with split data → render two length cards
+                          if (m.aggFunction === 'SUM' && m.activeTotal != null && m.completedTotal != null) {
+                            const fmtLen = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 1 });
+                            const activeName   = lang === 'en' ? 'Incomplete Length (m)' : 'إجمالي الأطوال غير المنجزة';
+                            const completedName = lang === 'en' ? 'Completed Length (m)' : 'إجمالي الأطوال المكتملة';
+                            return (
+                              <React.Fragment key={m.code}>
+                                <div>
+                                  <button
+                                    onClick={() => openMetricDrawer(m.code, activeName, lang === 'en' ? 'Incomplete Length' : null, 'active')}
+                                    className="w-full text-right rounded-xl border border-amber-200 bg-white shadow-sm p-4 flex flex-col gap-1 h-full cursor-pointer hover:ring-2 hover:ring-amber-300 transition-shadow"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-medium text-slate-500">{activeName}</span>
+                                      <BarChart2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                                    </div>
+                                    <div className="text-2xl font-bold text-amber-700">{fmtLen(m.activeTotal)}</div>
+                                    <div className="text-xs text-amber-500 font-medium px-2 py-0.5 rounded-full bg-amber-50 self-start">{lang === 'en' ? 'proc.155 absent' : 'بدون إجراء 155'}</div>
+                                    <div className="text-xs text-slate-400">{m.activeCount ?? 0} {lang === 'en' ? 'orders' : 'أمر'}</div>
+                                  </button>
+                                </div>
+                                <div>
+                                  <button
+                                    onClick={() => openMetricDrawer(m.code, completedName, lang === 'en' ? 'Completed Length' : null, 'completed')}
+                                    className="w-full text-right rounded-xl border border-emerald-200 bg-white shadow-sm p-4 flex flex-col gap-1 h-full cursor-pointer hover:ring-2 hover:ring-emerald-300 transition-shadow"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-medium text-slate-500">{completedName}</span>
+                                      <BarChart2 className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                                    </div>
+                                    <div className="text-2xl font-bold text-emerald-700">{fmtLen(m.completedTotal)}</div>
+                                    <div className="text-xs text-emerald-500 font-medium px-2 py-0.5 rounded-full bg-emerald-50 self-start">{lang === 'en' ? 'proc.155 present' : 'مع إجراء 155'}</div>
+                                    <div className="text-xs text-slate-400">{m.completedCount ?? 0} {lang === 'en' ? 'orders' : 'أمر'}</div>
+                                  </button>
+                                </div>
+                              </React.Fragment>
+                            );
+                          }
+                          // All other NUMERIC_AGG (AVG, MIN, MAX) → standard card
+                          return <div key={m.nameAr}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>;
+                        })}
                         {/* كرت: مغلقة لم تُفوتر */}
                         {summary.kpiAlerts && (
                           <div>
