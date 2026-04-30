@@ -7,6 +7,43 @@ import { computeDashboardSummary, computeDashboardSummaryPerSector } from '../se
 
 const router = express.Router();
 
+// ── Financial accumulation helpers ───────────────────────────────────────────
+
+type FinancialTotals = {
+  estimated: number; invoiced: number; collected: number; remaining: number;
+  expectedRemaining: number; completedEstimated: number; completedInvoiced: number;
+};
+
+function makeFinancialTotals(): FinancialTotals {
+  return { estimated: 0, invoiced: 0, collected: 0, remaining: 0, expectedRemaining: 0, completedEstimated: 0, completedInvoiced: 0 };
+}
+
+function accumulateFinancial(acc: FinancialTotals, o: any, cancelledStageIds: Set<any>): void {
+  if (cancelledStageIds.has(o.stageId)) return;
+  const est     = Number(o.estimatedValue || 0);
+  const inv1    = Number(o.invoice1 ?? o.invoice_1 ?? 0) || 0;
+  const inv2    = Number(o.invoice2 ?? o.invoice_2 ?? 0) || 0;
+  const col     = Number(o.collectedAmount || 0);
+  const invType = o.invoiceType ?? o.invoice_type ?? null;
+
+  acc.estimated += est;
+  acc.invoiced  += col;
+  acc.collected += col;
+  acc.remaining += Math.max(0, est - col);
+
+  if      (invType === 'نهائي') acc.expectedRemaining += inv1 > 0 ? 0 : est;
+  else if (invType === 'جزئي')  acc.expectedRemaining += inv1 === 0 ? est : inv2 === 0 ? inv1 : 0;
+  else                          acc.expectedRemaining += est;
+
+  const isFullyInvoiced =
+    (invType === 'نهائي' && inv1 > 0) ||
+    (invType === 'جزئي'  && inv1 > 0 && inv2 > 0);
+  if (isFullyInvoiced) {
+    acc.completedEstimated += est;
+    acc.completedInvoiced  += invType === 'نهائي' ? inv1 : (inv1 + inv2);
+  }
+}
+
 async function getUserScope(userId: string, roleKey: string) {
   const [user, roleDef] = await Promise.all([
     db.query.users.findFirst({ where: eq(users.id, userId) }),
@@ -72,12 +109,15 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
 
     periodFilters = [...scopeFilters, ...periodFilters];
 
-    // Fetch all scope orders (no date limit) for KPI cards and financial totals
+    // All scope orders (no date limit) — for charts, comparisons, topDelays
     const allWorkOrders = await db.select().from(workOrders)
       .where(scopeFilters.length > 0 ? and(...scopeFilters) : undefined);
-    // Fetch period-limited orders for trend charts
-    const periodWorkOrders = await db.select({ id: workOrders.id, assignmentDate: workOrders.assignmentDate, projectType: workOrders.projectType })
-      .from(workOrders).where(and(...periodFilters));
+    // Snapshot orders (scope + assignmentDate ≤ end) — for KPI cards and financial snapshot
+    const snapshotOrders = await db.select().from(workOrders)
+      .where(and(...scopeFilters, lte(workOrders.assignmentDate, end)));
+    // Period orders (scope + start ≤ assignmentDate ≤ end) — for financial period + trend charts
+    const periodWorkOrders = await db.select().from(workOrders)
+      .where(and(...periodFilters));
     const allRegions = await db.select().from(regions);
     const allSectors = await db.select().from(sectors);
     const allStages = await db.select().from(stages);
@@ -118,13 +158,14 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       sectorIds:   kpiSectorIds,
       regionId:    kpiRegionId,
       projectType: projectType ? String(projectType) : null,
+      dateTo:      end,
     });
 
     const rawExecCompleted = kpiSummary.exec.COMPLETED + kpiSummary.exec.COMPLETED_LATE;
     const execCompletedButFinDelayed = kpiSummary.execCompletedButFinDelayed;
 
     const kpis = {
-      total:            allWorkOrders.length,
+      total:            snapshotOrders.length,
       // EXEC
       execCompleted:    rawExecCompleted - execCompletedButFinDelayed, // truly done (exec + fin both OK)
       execDelayed:      kpiSummary.exec.OVERDUE,
@@ -147,15 +188,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     const activeTotal = kpis.total - kpis.execCancelledCount;
     kpis.completionRate = activeTotal > 0 ? (kpis.execCompleted / activeTotal) * 100 : 0;
 
-    const financial = {
-      estimated: 0,
-      invoiced: 0,
-      collected: 0,
-      remaining: 0,
-      expectedRemaining: 0,
-      completedEstimated: 0,
-      completedInvoiced: 0,
-    };
+    const financial       = makeFinancialTotals(); // snapshot: assignmentDate ≤ end
+    const financialPeriod = makeFinancialTotals(); // period:   start ≤ assignmentDate ≤ end
 
     const assignmentTrendMap: Record<string, { name: string; value: number }> = {};
     const assignmentStackedMap: Record<string, { name: string; [key: string]: any }> = {};
@@ -191,42 +225,6 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       if (cancelledStageIds.has(orderAny.stageId)) return;
 
       const assignmentDate = orderAny.assignmentDate ? new Date(orderAny.assignmentDate) : null;
-
-      // Financial
-      const est  = Number(orderAny.estimatedValue || 0);
-      const inv1 = Number(orderAny.invoice1 ?? orderAny.invoice_1 ?? 0) || 0;
-      const inv2 = Number(orderAny.invoice2 ?? orderAny.invoice_2 ?? 0) || 0;
-      const col  = Number(orderAny.collectedAmount || 0);
-      const invType = orderAny.invoiceType ?? orderAny.invoice_type ?? null;
-
-      financial.estimated += est;
-      financial.invoiced  += col;
-      financial.collected += col;
-      financial.remaining += Math.max(0, est - col);
-
-      // المتبقي المتوقع
-      if (invType === 'نهائي') {
-        financial.expectedRemaining += inv1 > 0 ? 0 : est;
-      } else if (invType === 'جزئي') {
-        if (inv1 === 0) {
-          financial.expectedRemaining += est;
-        } else if (inv2 === 0) {
-          financial.expectedRemaining += inv1; // proxy: assume inv2 ≈ inv1
-        }
-        // both invoices exist → +0 (fully invoiced)
-      } else {
-        // no invoiceType → not yet invoiced → full estimated value is remaining
-        financial.expectedRemaining += est;
-      }
-
-      // الفرق للمفوتر المكتمل (only fully-invoiced orders)
-      const isFullyInvoiced =
-        (invType === 'نهائي' && inv1 > 0) ||
-        (invType === 'جزئي' && inv1 > 0 && inv2 > 0);
-      if (isFullyInvoiced) {
-        financial.completedEstimated += est;
-        financial.completedInvoiced  += invType === 'نهائي' ? inv1 : (inv1 + inv2);
-      }
 
       // TopDelays list (use assignment-date SLA for ranking only, not for counting)
       if (assignmentDate && !terminalStageIds.has(orderAny.stageId)) {
@@ -365,10 +363,18 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     const stageBottlenecks = Object.values(stageBottlenecksMap)
       .map(s => ({ nameAr: s.nameAr, nameEn: s.nameEn, value: s.count }));
 
-    // Derive الفرق للمفوتر المكتمل
+    // Accumulate financial snapshot (scope, assignmentDate ≤ end)
+    snapshotOrders.forEach((o: any) => accumulateFinancial(financial, o, cancelledStageIds));
     (financial as any).completedDiffValue = financial.completedInvoiced - financial.completedEstimated;
     (financial as any).completedDiffPct   = financial.completedEstimated > 0
       ? ((financial.completedInvoiced - financial.completedEstimated) / financial.completedEstimated) * 100
+      : 0;
+
+    // Accumulate financial period (scope, start ≤ assignmentDate ≤ end)
+    periodWorkOrders.forEach((o: any) => accumulateFinancial(financialPeriod, o, cancelledStageIds));
+    (financialPeriod as any).completedDiffValue = financialPeriod.completedInvoiced - financialPeriod.completedEstimated;
+    (financialPeriod as any).completedDiffPct   = financialPeriod.completedEstimated > 0
+      ? ((financialPeriod.completedInvoiced - financialPeriod.completedEstimated) / financialPeriod.completedEstimated) * 100
       : 0;
 
     const financialFunnel = [
@@ -387,13 +393,6 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       .sort((a, b) => b.estimated - a.estimated)
       .slice(0, 10);
 
-    // Per-sector KPI compliance (exec/fin status buckets per sector)
-    const perSectorKpi = await computeDashboardSummaryPerSector({
-      sectorIds:   kpiSectorIds,
-      regionId:    kpiRegionId,
-      projectType: projectType ? String(projectType) : null,
-    });
-
     // Per-sector annual targets (percentage-based)
     const currentYear = new Date().getFullYear();
     const sectorTargetRows = await db.select().from(sectorAnnualTargets)
@@ -402,18 +401,37 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       sectorTargetRows.map(r => [(r as any).sectorId, r])
     );
 
-    // حساب نسبة الفترة المختارة من السنة الكاملة لتناسب المستهدف السنوي
-    const daysDiff = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
-    const yearFraction = Math.min(daysDiff / 365, 1); // 0 < fraction ≤ 1
+    // Target year intersection: sector performance uses only data within the target year
+    const targetYear      = currentYear;
+    const targetYearStart = new Date(targetYear, 0, 1);
+    const targetYearEnd   = new Date(targetYear, 11, 31, 23, 59, 59, 999);
+    const effectiveStart  = new Date(Math.max(start.getTime(), targetYearStart.getTime()));
+    const effectiveEnd    = new Date(Math.min(end.getTime(),   targetYearEnd.getTime()));
+    const hasTargetOverlap = effectiveStart <= effectiveEnd;
 
-    // بيانات مالية مُفلترة بالفترة المختارة (للمقارنة مع المستهدف المتناسب)
+    // yearFraction based on effective (target-year-intersected) range
+    const daysDiff = hasTargetOverlap
+      ? Math.max(1, Math.ceil((effectiveEnd.getTime() - effectiveStart.getTime()) / (1000 * 60 * 60 * 24)))
+      : 0;
+    const yearFraction = Math.min(daysDiff / 365, 1);
+
+    // Per-sector KPI compliance — filtered to target year intersection
+    const perSectorKpi = await computeDashboardSummaryPerSector({
+      sectorIds:   kpiSectorIds,
+      regionId:    kpiRegionId,
+      projectType: projectType ? String(projectType) : null,
+      dateFrom:    hasTargetOverlap ? effectiveStart : null,
+      dateTo:      hasTargetOverlap ? effectiveEnd   : null,
+    });
+
+    // Sector financial data filtered to target year intersection
     const periodSectorFinMap: Record<string, { estimated: number; invoiced: number; collected: number; completed: number; total: number }> = {};
     allWorkOrders.forEach(order => {
       const o = order as any;
       if (cancelledStageIds.has(o.stageId)) return;
       if (!o.sectorId) return;
       const aDate = o.assignmentDate ? new Date(o.assignmentDate) : null;
-      if (!aDate || aDate < start || aDate > end) return; // فلتر التاريخ
+      if (!hasTargetOverlap || !aDate || aDate < effectiveStart || aDate > effectiveEnd) return;
       const sid = o.sectorId;
       if (!periodSectorFinMap[sid]) {
         periodSectorFinMap[sid] = { estimated: 0, invoiced: 0, collected: 0, completed: 0, total: 0 };
@@ -524,7 +542,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
           salesProgressPct,
           collectionRateTarget,
           finComplianceTarget,
-          periodDays: daysDiff,    // عدد أيام الفترة للعرض
+          periodDays: daysDiff,
+          noTargetData: !hasTargetOverlap,
+          targetYear,
         };
       })
       .filter(s => s.totalOrders > 0 || s.estimated > 0)
@@ -536,6 +556,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     res.json({
       kpis,
       financial,
+      financialPeriod,
       assignmentTrend,
       assignmentStacked,
       execClosureTrend,

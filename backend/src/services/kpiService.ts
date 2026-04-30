@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { kpiRules, kpiTemplates, workOrders, roleColumnPermissions, stages, columnCatalog } from '../db/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, lte, gte } from 'drizzle-orm';
 
 export interface KpiResult {
   ruleId: string;
@@ -365,6 +365,7 @@ export async function computeDashboardSummary(opts?: {
   sectorIds?: string[] | null;
   regionId?: string | null;
   projectType?: string | null;
+  dateTo?: Date | null;
 }): Promise<{
   exec: Record<DashboardStatus, number>;
   fin:  Record<DashboardStatus, number>;
@@ -415,6 +416,7 @@ export async function computeDashboardSummary(opts?: {
   }
   if (opts?.regionId)    conds.push(eq(workOrders.regionId,   opts.regionId));
   if (opts?.projectType) conds.push(eq(workOrders.projectType, opts.projectType));
+  if (opts?.dateTo)      conds.push(lte(workOrders.assignmentDate, opts.dateTo));
 
   const allOrders = conds.length
     ? await db.select().from(workOrders).where(and(...conds))
@@ -452,6 +454,8 @@ export async function computeDashboardSummaryPerSector(opts?: {
   sectorIds?: string[] | null;
   regionId?: string | null;
   projectType?: string | null;
+  dateFrom?: Date | null;
+  dateTo?: Date | null;
 }): Promise<Record<string, {
   exec: Record<DashboardStatus, number>;
   fin:  Record<DashboardStatus, number>;
@@ -483,8 +487,10 @@ export async function computeDashboardSummaryPerSector(opts?: {
       ? eq(workOrders.sectorId, opts.sectorIds[0])
       : inArray(workOrders.sectorId, opts.sectorIds));
   }
-  if (opts?.regionId) conds.push(eq(workOrders.regionId, opts.regionId));
-  if (opts?.projectType) conds.push(eq(workOrders.projectType, opts.projectType));
+  if (opts?.regionId)    conds.push(eq(workOrders.regionId,    opts.regionId));
+  if (opts?.projectType) conds.push(eq(workOrders.projectType,  opts.projectType));
+  if (opts?.dateFrom)    conds.push(gte(workOrders.assignmentDate, opts.dateFrom));
+  if (opts?.dateTo)      conds.push(lte(workOrders.assignmentDate, opts.dateTo));
 
   const allOrders = conds.length
     ? await db.select().from(workOrders).where(and(...conds))
