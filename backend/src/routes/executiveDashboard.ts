@@ -205,7 +205,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
 
       // المتبقي المتوقع
       if (invType === 'نهائي') {
-        financial.expectedRemaining += inv1 > 0 ? inv1 : est;
+        financial.expectedRemaining += inv1 > 0 ? 0 : est;
       } else if (invType === 'جزئي') {
         if (inv1 === 0) {
           financial.expectedRemaining += est;
@@ -804,7 +804,7 @@ router.get('/financial-detail', authenticate, async (req: AuthRequest, res) => {
         // Per-row expected remaining — same logic as main endpoint lines 198-208
         let perRowRemaining = 0;
         if (invType === 'نهائي') {
-          perRowRemaining = inv1 > 0 ? inv1 : est;
+          perRowRemaining = inv1 > 0 ? 0 : est;
         } else if (invType === 'جزئي') {
           if      (inv1 === 0) perRowRemaining = est;
           else if (inv2 === 0) perRowRemaining = inv1; // proxy: assume inv2 ≈ inv1
