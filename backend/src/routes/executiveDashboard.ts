@@ -144,7 +144,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
       completionRate:   0,
       cancelled:        kpiSummary.exec.CANCELLED,
     };
-    kpis.completionRate = kpis.total > 0 ? (kpis.execCompleted / kpis.total) * 100 : 0;
+    const activeTotal = kpis.total - kpis.execCancelledCount;
+    kpis.completionRate = activeTotal > 0 ? (kpis.execCompleted / activeTotal) * 100 : 0;
 
     const financial = {
       estimated: 0,
