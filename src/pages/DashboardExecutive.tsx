@@ -887,8 +887,13 @@ export default function DashboardExecutive() {
         <KpiSummaryBar kpis={data?.kpis} loading={loading} lang={lang} />
       </div>
 
-      {/* Financial Cards */}
-      <div className="px-6 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Financial Cards — Snapshot (assignmentDate ≤ end) */}
+      <div className="px-6 pt-4 pb-1">
+        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">
+          {lang === 'en' ? 'Portfolio (up to end of period)' : 'محفظة حتى تاريخ نهاية الفترة'}
+        </span>
+      </div>
+      <div className="px-6 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <FinanceCard
           label={lang === 'en' ? 'Estimated Value' : 'القيمة التقديرية'}
           value={formatCurrency(data?.financial?.estimated)}
@@ -1118,6 +1123,59 @@ export default function DashboardExecutive() {
         )}
       </AnimatePresence>
 
+      {/* Financial Cards — Period (start ≤ assignmentDate ≤ end) */}
+      <div className="px-6 pt-4 pb-1">
+        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">
+          {lang === 'en' ? 'Period Performance' : 'أداء الفترة المحددة'}
+        </span>
+      </div>
+      <div className="px-6 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <FinanceCard
+          label={lang === 'en' ? 'Estimated Value' : 'القيمة التقديرية'}
+          value={formatCurrency(data?.financialPeriod?.estimated)}
+          icon={DollarSign}
+          loading={loading}
+          active={false}
+          tooltip={lang === 'en'
+            ? 'Total estimated value of work orders assigned within the selected date range.'
+            : 'إجمالي القيمة التقديرية لأوامر العمل المُسندة خلال الفترة المحددة.'}
+        />
+        <FinanceCard
+          label={lang === 'en' ? 'Total Invoiced' : 'إجمالي المفوتر'}
+          value={formatCurrency(data?.financialPeriod?.invoiced)}
+          icon={ClipboardList}
+          loading={loading}
+          active={false}
+          pct={data?.financialPeriod?.estimated ? (data.financialPeriod.invoiced / data.financialPeriod.estimated) * 100 : null}
+          tooltip={lang === 'en'
+            ? 'Total invoiced (Invoice 1 + Invoice 2) for work orders assigned within the selected period.'
+            : 'مجموع ما تم إصداره من فواتير (مستخلص 1 + مستخلص 2) لأوامر العمل المُسندة خلال الفترة المحددة.'}
+        />
+        <FinanceCard
+          label={lang === 'en' ? 'Expected Remaining' : 'المتبقي المتوقع'}
+          value={formatCurrency(data?.financialPeriod?.expectedRemaining)}
+          icon={Clock}
+          loading={loading}
+          active={false}
+          tooltip={lang === 'en'
+            ? 'Approximate remaining amount to be invoiced for work orders assigned within the selected period.'
+            : 'تقدير تقريبي للمبلغ المتبقي فوترته لأوامر العمل المُسندة خلال الفترة المحددة.'}
+        />
+        <FinanceCard
+          label={lang === 'en' ? 'Completed Invoicing Gap' : 'الفرق للمفوتر المكتمل'}
+          value={formatCurrency(data?.financialPeriod?.completedDiffValue ?? 0)}
+          subValue={data?.financialPeriod?.completedDiffPct != null
+            ? `${(data.financialPeriod.completedDiffPct as number).toFixed(1)}%`
+            : null}
+          icon={Scale}
+          loading={loading}
+          active={false}
+          tooltip={lang === 'en'
+            ? 'Actual difference between estimated and total invoiced for fully-invoiced orders assigned within the selected period.'
+            : 'الفرق الفعلي بين القيمة التقديرية وإجمالي المفوتر للأوامر المكتملة فوترة المُسندة خلال الفترة المحددة.'}
+        />
+      </div>
+
       {/* ── أداء القطاعات ── */}
       <div className="px-6 pt-4">
         {/* Section Header */}
@@ -1127,6 +1185,13 @@ export default function DashboardExecutive() {
             <span className="text-sm font-bold text-slate-800">
               {lang === 'en' ? 'Sector Performance' : 'أداء القطاعات'}
             </span>
+            {(data?.sectorPerformance as any[])?.[0]?.targetYear && (
+              <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+                {lang === 'en'
+                  ? `Target year: ${(data!.sectorPerformance as any[])[0].targetYear}`
+                  : `السنة المستهدفة: ${(data!.sectorPerformance as any[])[0].targetYear}`}
+              </span>
+            )}
             {targetsSaved && (
               <span className="text-xs text-emerald-600 font-medium bg-emerald-50 px-2 py-0.5 rounded-full">
                 {lang === 'en' ? '✓ Saved' : '✓ تم الحفظ'}
@@ -1325,6 +1390,22 @@ export default function DashboardExecutive() {
                 : overallTL.dot === 'bg-red-500'
                 ? (lang === 'en' ? 'Delayed' : 'متأخر')
                 : (lang === 'en' ? 'No Data' : 'لا بيانات');
+
+              if (s.noTargetData) {
+                return (
+                  <div key={s.sectorId} className="bg-white rounded-2xl border border-amber-200 shadow-sm flex flex-col items-center justify-center py-10 text-center gap-2">
+                    <span className="text-sm font-semibold text-slate-700">{name}</span>
+                    <span className="text-xs text-amber-600 font-medium">
+                      {lang === 'en' ? 'No data for target year' : 'لا توجد بيانات للسنة المستهدفة'}
+                    </span>
+                    {s.targetYear && (
+                      <span className="text-xs text-slate-400">
+                        {lang === 'en' ? `Target year: ${s.targetYear}` : `السنة المستهدفة: ${s.targetYear}`}
+                      </span>
+                    )}
+                  </div>
+                );
+              }
 
               return (
                 <div key={s.sectorId} data-testid={`card-sector-${s.sectorId}`}
