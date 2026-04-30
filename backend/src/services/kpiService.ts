@@ -451,6 +451,7 @@ export async function computeDashboardSummary(opts?: {
 export async function computeDashboardSummaryPerSector(opts?: {
   sectorIds?: string[] | null;
   regionId?: string | null;
+  projectType?: string | null;
 }): Promise<Record<string, {
   exec: Record<DashboardStatus, number>;
   fin:  Record<DashboardStatus, number>;
@@ -483,6 +484,7 @@ export async function computeDashboardSummaryPerSector(opts?: {
       : inArray(workOrders.sectorId, opts.sectorIds));
   }
   if (opts?.regionId) conds.push(eq(workOrders.regionId, opts.regionId));
+  if (opts?.projectType) conds.push(eq(workOrders.projectType, opts.projectType));
 
   const allOrders = conds.length
     ? await db.select().from(workOrders).where(and(...conds))

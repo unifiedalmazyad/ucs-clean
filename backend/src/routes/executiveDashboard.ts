@@ -388,8 +388,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
 
     // Per-sector KPI compliance (exec/fin status buckets per sector)
     const perSectorKpi = await computeDashboardSummaryPerSector({
-      sectorIds: kpiSectorIds,
-      regionId:  kpiRegionId,
+      sectorIds:   kpiSectorIds,
+      regionId:    kpiRegionId,
+      projectType: projectType ? String(projectType) : null,
     });
 
     // Per-sector annual targets (percentage-based)
@@ -827,7 +828,7 @@ router.get('/financial-detail', authenticate, async (req: AuthRequest, res) => {
           (invType === 'نهائي' && inv1 > 0) ||
           (invType === 'جزئي'  && inv1 > 0 && inv2 > 0);
         if (isFullyInvoiced) {
-          const totalInvoiced = inv1 + inv2;
+          const totalInvoiced = invType === 'نهائي' ? inv1 : (inv1 + inv2);
           const diffValue     = totalInvoiced - est;
           const diffPct       = est > 0 ? (diffValue / est) * 100 : 0;
           summary.totalDiffEstimated += est;
