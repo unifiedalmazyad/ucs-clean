@@ -5,6 +5,12 @@ import Database from 'better-sqlite3';
 import * as schemaPg from './schema_pg';
 import * as schemaSqlite from './schema_sqlite';
 
+if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
+  throw new Error(
+    '[DB] DATABASE_URL is not set — refusing to start in production without a database connection.'
+  );
+}
+
 const isDemo = process.env.DEMO_MODE === 'true' || !process.env.DATABASE_URL;
 
 export let db: any;

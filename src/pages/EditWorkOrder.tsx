@@ -1214,7 +1214,7 @@ function KpiList({ workOrderId }: { workOrderId: string }) {
 }
 
 // ─── Excavation Permits Sub-Table ─────────────────────────────────────────────
-function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true }: { workOrderId: string; canEdit?: boolean; canDelete?: boolean }) {
+function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true, assignmentDate }: { workOrderId: string; canEdit?: boolean; canDelete?: boolean; assignmentDate?: string }) {
   const [permits, setPermits]       = useState<any[]>([]);
   const [loading, setLoading]       = useState(true);
   const [showForm, setShowForm]     = useState(false);
@@ -1222,6 +1222,8 @@ function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true 
   const [saving, setSaving]         = useState(false);
   const [form, setForm]             = useState({ permitNo: '', startDate: '', endDate: '' });
   const [extForm, setExtForm]       = useState({ startDate: '', endDate: '' });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [extErrors, setExtErrors]   = useState<Record<string, string>>({});
   const { lang } = useLang();
 
   const loadPermits = async () => {
@@ -1234,15 +1236,32 @@ function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true 
 
   useEffect(() => { loadPermits(); }, [workOrderId]);
 
+  const validateAddForm = (f = form) => {
+    const e: Record<string, string> = {};
+    if (!f.permitNo.trim()) e.permitNo = lang === 'en' ? 'Required' : 'مطلوب';
+    if (!f.startDate) e.startDate = lang === 'en' ? 'Start date required' : 'تاريخ البداية مطلوب';
+    if (!f.endDate)   e.endDate   = lang === 'en' ? 'End date required'   : 'تاريخ الانتهاء مطلوب';
+    if (assignmentDate && f.startDate && f.startDate < assignmentDate)
+      e.startDate = lang === 'en' ? 'Cannot be before assignment date' : 'لا يمكن أن يكون قبل تاريخ إسناد أمر العمل';
+    if (f.startDate && f.endDate && f.endDate < f.startDate)
+      e.endDate = lang === 'en' ? 'Cannot be before start date' : 'لا يمكن أن يكون قبل تاريخ البداية';
+    return e;
+  };
+
   const handleAdd = async () => {
-    if (!form.permitNo.trim()) { alert(lang === 'en' ? 'Permit number is required' : 'رقم التصريح مطلوب'); return; }
+    const errs = validateAddForm();
+    setFormErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     try {
       await api.post(`/work-orders/${workOrderId}/excavation-permits`, form);
       setForm({ permitNo: '', startDate: '', endDate: '' });
+      setFormErrors({});
       setShowForm(false);
       loadPermits();
-    } catch (e: any) { alert(e?.response?.data?.error || (lang === 'en' ? 'Save failed' : 'فشل الحفظ')); }
+    } catch (e: any) {
+      setFormErrors({ _server: e?.response?.data?.error || (lang === 'en' ? 'Save failed' : 'فشل الحفظ') });
+    }
     finally { setSaving(false); }
   };
 
@@ -1252,21 +1271,39 @@ function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true 
     loadPermits();
   };
 
+  const validateExtForm = (f = extForm) => {
+    const e: Record<string, string> = {};
+    if (!f.startDate) e.startDate = lang === 'en' ? 'Start date required' : 'تاريخ البداية مطلوب';
+    if (!f.endDate)   e.endDate   = lang === 'en' ? 'End date required'   : 'تاريخ الانتهاء مطلوب';
+    if (extTarget?.endDate && f.startDate && f.startDate < extTarget.endDate)
+      e.startDate = lang === 'en' ? 'Cannot be before end of previous permit' : 'لا يمكن أن يكون قبل نهاية التصريح السابق';
+    if (f.startDate && f.endDate && f.endDate < f.startDate)
+      e.endDate = lang === 'en' ? 'Cannot be before start date' : 'لا يمكن أن يكون قبل تاريخ البداية';
+    return e;
+  };
+
   const handleExtend = async () => {
     if (!extTarget) return;
+    const errs = validateExtForm();
+    setExtErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     try {
       await api.post(`/work-orders/${workOrderId}/excavation-permits/${extTarget.id}/extend`, extForm);
       setExtTarget(null);
       setExtForm({ startDate: '', endDate: '' });
+      setExtErrors({});
       loadPermits();
-    } catch (e: any) { alert(e?.response?.data?.error || (lang === 'en' ? 'Extension failed' : 'فشل التمديد')); }
+    } catch (e: any) {
+      setExtErrors({ _server: e?.response?.data?.error || (lang === 'en' ? 'Extension failed' : 'فشل التمديد') });
+    }
     finally { setSaving(false); }
   };
 
   const statusBadge = (s: string) => {
     if (s === 'منتهي')             return 'bg-red-100 text-red-700';
     if (s === 'شارف على الانتهاء') return 'bg-amber-100 text-amber-700';
+    if (s === 'لم يبدأ بعد')      return 'bg-blue-100 text-blue-700';
     return 'bg-emerald-100 text-emerald-700';
   };
 
@@ -1304,42 +1341,48 @@ function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true 
               <input
                 type="text"
                 value={form.permitNo}
-                onChange={e => setForm({ ...form, permitNo: e.target.value })}
+                onChange={e => { const f = { ...form, permitNo: e.target.value }; setForm(f); if (Object.keys(formErrors).length > 0) setFormErrors(validateAddForm(f)); }}
                 placeholder="EX-2025-001"
                 data-testid="input-permit-no"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white"
+                className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white ${formErrors.permitNo ? 'border-red-400' : 'border-slate-200'}`}
               />
+              {formErrors.permitNo && <p className="text-xs text-red-500">{formErrors.permitNo}</p>}
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'Start Date' : 'تاريخ البداية'}</label>
+              <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'Start Date *' : 'تاريخ البداية *'}</label>
               <input
                 type="date"
                 value={form.startDate}
-                onChange={e => setForm({ ...form, startDate: e.target.value })}
+                min={assignmentDate}
+                onChange={e => { const f = { ...form, startDate: e.target.value }; setForm(f); if (Object.keys(formErrors).length > 0) setFormErrors(validateAddForm(f)); }}
                 data-testid="input-permit-start"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white"
+                className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white ${formErrors.startDate ? 'border-red-400' : 'border-slate-200'}`}
               />
+              {formErrors.startDate && <p className="text-xs text-red-500">{formErrors.startDate}</p>}
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'End Date' : 'تاريخ الانتهاء'}</label>
+              <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'End Date *' : 'تاريخ الانتهاء *'}</label>
               <input
                 type="date"
                 value={form.endDate}
-                onChange={e => setForm({ ...form, endDate: e.target.value })}
+                min={form.startDate || assignmentDate || undefined}
+                onChange={e => { const f = { ...form, endDate: e.target.value }; setForm(f); if (Object.keys(formErrors).length > 0) setFormErrors(validateAddForm(f)); }}
                 data-testid="input-permit-end"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white"
+                className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none bg-white ${formErrors.endDate ? 'border-red-400' : 'border-slate-200'}`}
               />
+              {formErrors.endDate && <p className="text-xs text-red-500">{formErrors.endDate}</p>}
             </div>
           </div>
           <div className="flex gap-2 mt-3">
-            <button onClick={handleAdd} disabled={saving} data-testid="btn-save-permit"
+            <button onClick={handleAdd} disabled={saving || Object.keys(formErrors).length > 0} data-testid="btn-save-permit"
               className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg disabled:opacity-50 transition-colors">
               {saving ? (lang === 'en' ? 'Saving...' : 'جاري الحفظ...') : (lang === 'en' ? 'Save' : 'حفظ')}
             </button>
-            <button onClick={() => setShowForm(false)} className="px-4 py-1.5 border border-slate-200 text-slate-600 text-sm rounded-lg hover:bg-white transition-colors">
+            <button onClick={() => { setShowForm(false); setFormErrors({}); }} className="px-4 py-1.5 border border-slate-200 text-slate-600 text-sm rounded-lg hover:bg-white transition-colors">
               {lang === 'en' ? 'Cancel' : 'إلغاء'}
             </button>
           </div>
+          {formErrors._server && <p className="text-xs text-red-500 mt-1">{formErrors._server}</p>}
         </div>
       )}
 
@@ -1413,29 +1456,36 @@ function ExcavationPermitsTable({ workOrderId, canEdit = true, canDelete = true 
       {/* Extension Modal */}
       {extTarget && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-          onClick={e => e.target === e.currentTarget && setExtTarget(null)}>
+          onClick={e => { if (e.target === e.currentTarget) { setExtTarget(null); setExtErrors({}); } }}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
             <div className="flex items-center justify-between p-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-800 text-sm">{lang === 'en' ? 'Extend Permit:' : 'تمديد التصريح:'} <span className="font-mono text-indigo-600">{extTarget.permitNo}</span></h3>
-              <button onClick={() => setExtTarget(null)} className="p-1 hover:bg-slate-100 rounded-lg">
+              <button onClick={() => { setExtTarget(null); setExtErrors({}); }} className="p-1 hover:bg-slate-100 rounded-lg">
                 <svg className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
               </button>
             </div>
             <div className="p-4 space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'Extension Start Date' : 'تاريخ بداية التمديد'}</label>
-                <input type="date" value={extForm.startDate} onChange={e => setExtForm({ ...extForm, startDate: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none" />
+                <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'Extension Start Date *' : 'تاريخ بداية التمديد *'}</label>
+                <input type="date" value={extForm.startDate}
+                  min={extTarget?.endDate || assignmentDate || undefined}
+                  onChange={e => { const f = { ...extForm, startDate: e.target.value }; setExtForm(f); if (Object.keys(extErrors).length > 0) setExtErrors(validateExtForm(f)); }}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none ${extErrors.startDate ? 'border-red-400' : 'border-slate-200'}`} />
+                {extErrors.startDate && <p className="text-xs text-red-500">{extErrors.startDate}</p>}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-slate-600">{lang === 'en' ? 'Extension End Date *' : 'تاريخ انتهاء التمديد *'}</label>
-                <input type="date" value={extForm.endDate} onChange={e => setExtForm({ ...extForm, endDate: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none" />
+                <input type="date" value={extForm.endDate}
+                  min={extForm.startDate || extTarget?.endDate || assignmentDate || undefined}
+                  onChange={e => { const f = { ...extForm, endDate: e.target.value }; setExtForm(f); if (Object.keys(extErrors).length > 0) setExtErrors(validateExtForm(f)); }}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none ${extErrors.endDate ? 'border-red-400' : 'border-slate-200'}`} />
+                {extErrors.endDate && <p className="text-xs text-red-500">{extErrors.endDate}</p>}
               </div>
+              {extErrors._server && <p className="text-xs text-red-500">{extErrors._server}</p>}
             </div>
             <div className="flex gap-2 p-4 border-t border-slate-100">
-              <button onClick={() => setExtTarget(null)} className="flex-1 px-3 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50">{lang === 'en' ? 'Cancel' : 'إلغاء'}</button>
-              <button onClick={handleExtend} disabled={saving || !extForm.endDate}
+              <button onClick={() => { setExtTarget(null); setExtErrors({}); }} className="flex-1 px-3 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50">{lang === 'en' ? 'Cancel' : 'إلغاء'}</button>
+              <button onClick={handleExtend} disabled={saving || Object.keys(extErrors).length > 0}
                 data-testid="btn-confirm-extend"
                 className="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm disabled:opacity-50 transition-colors">
                 {saving ? (lang === 'en' ? 'Loading...' : 'جاري...') : (lang === 'en' ? 'Confirm Extension' : 'تأكيد التمديد')}
@@ -1648,9 +1698,13 @@ export default function EditWorkOrder() {
   };
 
   const handleChange = (key: string, value: any) => {
-    setOrder((prev: any) => ({ ...prev, [key]: value }));
+    setOrder((prev: any) => {
+      const next = { ...prev, [key]: value };
+      const snake = key.replace(/([A-Z])/g, c => '_' + c.toLowerCase());
+      if (snake !== key) delete next[snake];
+      return next;
+    });
     setHasChanges(true);
-    // Clear any existing error for this key on change
     setDateErrors(prev => { const n = { ...prev }; delete n[key]; return n; });
   };
 
@@ -1658,16 +1712,23 @@ export default function EditWorkOrder() {
     const err = validateDateField(physicalKey, value, currentOrder);
     if (err) {
       setDateErrors(prev => ({ ...prev, [writeKey]: err }));
-      return; // reject: don't apply the value
+      return;
     }
     setDateErrors(prev => { const n = { ...prev }; delete n[writeKey]; return n; });
-    setOrder((prev: any) => ({ ...prev, [writeKey]: value }));
+    setOrder((prev: any) => {
+      const next = { ...prev, [writeKey]: value };
+      const snake = writeKey.replace(/([A-Z])/g, c => '_' + c.toLowerCase());
+      if (snake !== writeKey) delete next[snake];
+      return next;
+    });
     setHasChanges(true);
   };
 
   if (loading) return <div className="p-8 text-center text-slate-500">{lang === 'en' ? 'Loading...' : 'جاري التحميل...'}</div>;
 
   // ── Shared field renderer (used in both old and new design) ─────────────────
+  const LONG_TEXT_COLS = new Set(['hold_reason', 'survey_notes', 'execution_notes']);
+
   const renderField = (col: any) => {
     const writable = canWriteField(col.columnKey);
     const roClass  = "w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 text-sm flex items-center gap-2 min-h-[40px]";
@@ -1733,7 +1794,7 @@ export default function EditWorkOrder() {
           {!writable && <span className="text-slate-400 text-xs" title="للعرض فقط">🔒</span>}
         </label>
         {!writable ? (
-          col.columnKey === 'hold_reason'
+          LONG_TEXT_COLS.has(col.columnKey)
             ? <div className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 text-sm min-h-[40px] whitespace-pre-wrap leading-relaxed">{roValue()}</div>
             : <div className={roClass}>{roValue()}</div>
         ) : col.columnKey === 'sector_id' ? (
@@ -1802,8 +1863,8 @@ export default function EditWorkOrder() {
           </div>
         ) : col.dataType === 'numeric' || col.dataType === 'integer' ? (
           <input data-testid={`field-${col.columnKey}`} type="number" value={rawVal ?? ''} onChange={e => handleChange(writeKey, e.target.value === '' ? null : Number(e.target.value))} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
-        ) : col.dataType === 'text' && col.columnKey === 'hold_reason' ? (
-          <textarea data-testid={`field-${col.columnKey}`} rows={3} value={rawVal || ''} onChange={e => handleChange(writeKey, e.target.value)} className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm resize-none" />
+        ) : col.dataType === 'text' && LONG_TEXT_COLS.has(col.columnKey) ? (
+          <textarea data-testid={`field-${col.columnKey}`} rows={3} value={rawVal || ''} onChange={e => handleChange(writeKey, e.target.value)} className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm resize-y" />
         ) : (
           <input data-testid={`field-${col.columnKey}`} type="text" value={rawVal || ''} onChange={e => handleChange(writeKey, e.target.value)} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm" />
         )}
@@ -1834,7 +1895,7 @@ export default function EditWorkOrder() {
     const canInv2         = canWriteField('invoice_2');
     const canInv2BillDate = canWriteField('invoice_2_billing_date');
     const canFinClose     = canWriteField('financial_close_date');
-    const canNotes    = canWriteField('financial_close_notes');
+    const canNotes    = canWriteField('finance_remarks');
 
     /* ── الصف العلوي الثابت (يظهر دائماً) ── */
     const topSection = (
@@ -1976,9 +2037,9 @@ export default function EditWorkOrder() {
             </div>
             <div>
               <label className={lbl}>ملاحظات الإجراء المالي</label>
-              <input type="text" value={rs('financialNotes','financial_close_notes')} disabled={!canNotes}
-                onChange={e => handleChange('financialNotes', e.target.value)}
-                className={inpD(!canNotes)} />
+              <textarea rows={3} value={rs('financeRemarks','finance_remarks')} disabled={!canNotes}
+                onChange={e => handleChange('financeRemarks', e.target.value)}
+                className={inpD(!canNotes) + ' resize-y'} />
             </div>
           </div>
         </div>
@@ -2027,8 +2088,8 @@ export default function EditWorkOrder() {
           </div>
           <div>
             <label className={lbl}>ملاحظات الإجراء المالي</label>
-            <input type="text" value={rs('financialNotes','financial_close_notes')} disabled={!canNotes}
-              onChange={e => handleChange('financialNotes', e.target.value)}
+            <input type="text" value={rs('financeRemarks','finance_remarks')} disabled={!canNotes}
+              onChange={e => handleChange('financeRemarks', e.target.value)}
               className={inpD(!canNotes)} />
           </div>
         </div>
@@ -2135,6 +2196,7 @@ export default function EditWorkOrder() {
                               workOrderId={id!}
                               canEdit={userScope.canEditExcavationPermits ?? (userScope.role === 'ADMIN')}
                               canDelete={userScope.canDeleteExcavationPermits ?? (userScope.role === 'ADMIN')}
+                              assignmentDate={(order.assignmentDate ?? order.assignment_date) ? String(order.assignmentDate ?? order.assignment_date).slice(0, 10) : undefined}
                             />
                           </div>
                         )}

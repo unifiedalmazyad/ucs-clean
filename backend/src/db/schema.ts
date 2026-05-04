@@ -41,4 +41,5 @@ export const {
   sectorAnnualTargets,
   contracts,
   contractAttachments,
+  systemSettings,
 } = schema as any;

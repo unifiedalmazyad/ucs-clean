@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, numeric, jsonb, pgEnum, uniqueIndex, integer, date, serial } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, boolean, numeric, jsonb, pgEnum, uniqueIndex, integer, date, serial, varchar } from 'drizzle-orm/pg-core';
 
 // Enums
 export const roleEnum = ['ADMIN', 'MANAGER', 'OPERATOR', 'COORDINATOR', 'GIS', 'FINANCE', 'ASSISTANT', 'VIEWER'] as const;
@@ -318,7 +318,7 @@ export const reportExports = pgTable('report_exports', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// Audit Logs
+// Work Order Notes
 export const workOrderNotes = pgTable('work_order_notes', {
   id: uuid('id').primaryKey().defaultRandom(),
   workOrderId: uuid('work_order_id').notNull().references(() => workOrders.id, { onDelete: 'cascade' }),
@@ -556,4 +556,11 @@ export const sectorAnnualTargets = pgTable('sector_annual_targets', {
   salesRateTarget: numeric('sales_rate_target').default('90'),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
   updatedBy: text('updated_by'),
+});
+
+// ─── System Settings (key-value store for global app config) ─────────────────
+export const systemSettings = pgTable('system_settings', {
+  key:       varchar('key', { length: 100 }).primaryKey(),
+  value:     text('value'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });

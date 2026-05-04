@@ -957,7 +957,8 @@ router.post('/roles', authenticate, authorize(['ADMIN']), async (req, res) => {
     const { nameAr, nameEn, roleKey, scopeType, canCreateOrder, canDeleteOrder, canEditExecution,
             canViewExcavationPermits, canEditExcavationPermits, canDeleteExcavationPermits,
             canViewExecutiveDashboard, canViewExecKpiCards, canViewFinKpiCards,
-            canViewPeriodicReport, canManageTargets } = req.body;
+            canViewPeriodicReport, canManageTargets,
+            canViewContracts, canManageContracts } = req.body;
     if (!nameAr || !roleKey) return res.status(400).json({ error: 'nameAr and roleKey required' });
     const maxOrder = await db.select({ max: sql<number>`COALESCE(MAX(sort_order),0)` }).from(roleDefinitions);
     const [role] = await db.insert(roleDefinitions).values({
@@ -975,6 +976,8 @@ router.post('/roles', authenticate, authorize(['ADMIN']), async (req, res) => {
       canViewFinKpiCards:  canViewFinKpiCards  !== false,
       canViewPeriodicReport: canViewPeriodicReport ?? false,
       canManageTargets: canManageTargets ?? false,
+      canViewContracts: canViewContracts ?? false,
+      canManageContracts: canManageContracts ?? false,
       isSystem: false,
       active: true,
       sortOrder: (Number(maxOrder[0]?.max) ?? 0) + 1,
@@ -993,7 +996,8 @@ router.put('/roles/:key', authenticate, authorize(['ADMIN']), async (req, res) =
     const { nameAr, nameEn, scopeType, canCreateOrder, canDeleteOrder, canEditExecution, active,
             canViewExcavationPermits, canEditExcavationPermits, canDeleteExcavationPermits,
             canViewExecutiveDashboard, canViewExecKpiCards, canViewFinKpiCards,
-            canViewPeriodicReport, canManageTargets } = req.body;
+            canViewPeriodicReport, canManageTargets,
+            canViewContracts, canManageContracts } = req.body;
     await db.update(roleDefinitions).set({
       ...(nameAr !== undefined && { nameAr }),
       ...(nameEn !== undefined && { nameEn }),
@@ -1009,6 +1013,8 @@ router.put('/roles/:key', authenticate, authorize(['ADMIN']), async (req, res) =
       ...(canViewFinKpiCards  !== undefined && { canViewFinKpiCards }),
       ...(canViewPeriodicReport !== undefined && { canViewPeriodicReport }),
       ...(canManageTargets !== undefined && { canManageTargets }),
+      ...(canViewContracts !== undefined && { canViewContracts }),
+      ...(canManageContracts !== undefined && { canManageContracts }),
       ...(active !== undefined && { active }),
     }).where(eq(roleDefinitions.roleKey, req.params.key));
     res.json({ message: 'Updated' });

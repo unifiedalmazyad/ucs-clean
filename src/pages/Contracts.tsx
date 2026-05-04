@@ -553,18 +553,30 @@ export default function Contracts() {
   const [modal, setModal]           = useState<'create' | Contract | null>(null);
   const [err, setErr]               = useState('');
 
+  const usr = user();
+  const isScoped = usr.scopeType === 'OWN_SECTOR' || usr.scopeType === 'OWN_REGION';
+
   const load = useCallback(async () => {
     setLoading(true); setErr('');
     try {
       const params = new URLSearchParams();
       if (filterSector) params.set('sectorId', filterSector);
       if (showArchived) params.set('archived', 'true');
-      const [cr, sr] = await Promise.all([
-        api.get(`/contracts?${params}`),
-        api.get('/admin/sectors'),
-      ]);
+      const cr = await api.get(`/contracts?${params}`);
       setContracts(cr.data);
-      setSectors(sr.data);
+      try {
+        const sr = await api.get('/admin/sectors');
+        setSectors(sr.data);
+      } catch {
+        const derived: Sector[] = Object.values(
+          (cr.data as Contract[]).reduce((acc: Record<string, Sector>, c) => {
+            if (c.sectorId && !acc[c.sectorId])
+              acc[c.sectorId] = { id: c.sectorId, nameAr: c.sectorNameAr ?? c.sectorId, nameEn: c.sectorNameEn };
+            return acc;
+          }, {})
+        );
+        setSectors(derived);
+      }
     } catch { setErr(lang === 'en' ? 'Failed to load contracts.' : 'فشل تحميل العقود.'); }
     finally { setLoading(false); }
   }, [filterSector, showArchived, lang]);
@@ -630,11 +642,13 @@ export default function Contracts() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
-        <select value={filterSector} onChange={e => setFilterSector(e.target.value)}
-          className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white">
-          <option value="">{lang === 'en' ? 'All sectors' : 'كل القطاعات'}</option>
-          {sectors.map(s => <option key={s.id} value={s.id}>{lang === 'en' && s.nameEn ? s.nameEn : s.nameAr}</option>)}
-        </select>
+        {!isScoped && (
+          <select value={filterSector} onChange={e => setFilterSector(e.target.value)}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white">
+            <option value="">{lang === 'en' ? 'All sectors' : 'كل القطاعات'}</option>
+            {sectors.map(s => <option key={s.id} value={s.id}>{lang === 'en' && s.nameEn ? s.nameEn : s.nameAr}</option>)}
+          </select>
+        )}
         <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
           <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)}
             className="w-4 h-4 accent-indigo-600" />
@@ -692,13 +706,13 @@ export default function Contracts() {
 
       {/* Relink panel (managers only) */}
       {canManage() && sectors.length > 0 && (
-        <RelinkPanel sectors={sectors} />
+        <RelinkPanel sectors={isScoped && usr.sectorId ? sectors.filter(s => s.id === usr.sectorId) : sectors} />
       )}
 
       {/* Create / Edit modal */}
       {modal && (
         <ContractModal
-          sectors={sectors}
+          sectors={isScoped && usr.sectorId ? sectors.filter(s => s.id === usr.sectorId) : sectors}
           initial={modal === 'create' ? undefined : modal as Contract}
           onSave={modal === 'create' ? handleCreate : handleEdit}
           onClose={() => setModal(null)}

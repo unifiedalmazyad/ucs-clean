@@ -416,11 +416,28 @@ router.put('/:id', authenticate, async (req: AuthRequest, res) => {
     if (finPut) Object.assign(coreReady, finPut);
 
     // ── Sector / Region enforcement ──────────────────────────────────────────
-    // Non-admin users cannot change the sector or region of an existing order.
-    // Strip any submitted sectorId/regionId and restore from the existing record.
+    // sectorId: always locked for non-admin.
+    // regionId: locked for OWN_REGION; OWN_SECTOR may update only within their sector.
     if (req.user!.role !== 'ADMIN') {
+      const scopeEdit = await getUserScope(req.user!.id, req.user!.role);
       delete (coreReady as any).sectorId;
-      delete (coreReady as any).regionId;
+
+      if (scopeEdit.scopeType === 'OWN_REGION') {
+        delete (coreReady as any).regionId;
+      } else if (
+        scopeEdit.scopeType === 'OWN_SECTOR' &&
+        (coreReady as any).regionId &&
+        scopeEdit.sectorId
+      ) {
+        const validRegion = await db.query.regions.findFirst({
+          where: and(
+            eq(regions.id, (coreReady as any).regionId),
+            eq(regions.sectorId, scopeEdit.sectorId)
+          ),
+        });
+        if (!validRegion) delete (coreReady as any).regionId;
+      }
+      // scopeType === 'ALL': no restriction on regionId
     }
 
     // ── Re-resolve contract if sectorId or assignmentDate changed ────────────
@@ -728,18 +745,39 @@ async function getExcavationPerms(userId: string, roleKey: string) {
   };
 }
 
-function permitStatus(endDate: string | null): string {
+function toDateOnly(val: string | Date | null | undefined): string | null {
+  if (val == null) return null;
+  const d = val instanceof Date ? val : new Date(String(val));
+  return d.toLocaleDateString('sv'); // YYYY-MM-DD in server local time (TZ=Asia/Riyadh)
+}
+
+function validatePermitDates(
+  startDate: string | null | undefined,
+  endDate:   string | null | undefined,
+  assignmentDate: string | null | undefined,
+): string | null {
+  if (!startDate) return 'تاريخ البداية مطلوب';
+  if (!endDate)   return 'تاريخ الانتهاء مطلوب';
+  const ad = toDateOnly(assignmentDate);
+  if (ad && startDate < ad) return 'تاريخ البداية لا يمكن أن يكون قبل تاريخ إسناد أمر العمل';
+  if (endDate < startDate)  return 'تاريخ الانتهاء لا يمكن أن يكون قبل تاريخ البداية';
+  return null;
+}
+
+function permitStatus(startDate: string | null, endDate: string | null): string {
+  const today = toDateOnly(new Date())!;
+  if (endDate && today > endDate) return 'منتهي';
+  if (startDate && startDate > today) return 'لم يبدأ بعد';
   if (!endDate) return 'ساري';
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const end   = new Date(endDate); end.setHours(0, 0, 0, 0);
-  const warn  = new Date(end); warn.setDate(warn.getDate() - 5);
-  if (today >= end)  return 'منتهي';
+  const warnD = new Date(endDate + 'T12:00:00');
+  warnD.setDate(warnD.getDate() - 5);
+  const warn = toDateOnly(warnD)!;
   if (today >= warn) return 'شارف على الانتهاء';
   return 'ساري';
 }
 
 function enrichPermit(p: any) {
-  return { ...p, status: permitStatus(p.endDate ?? p.end_date) };
+  return { ...p, status: permitStatus(p.startDate ?? p.start_date, p.endDate ?? p.end_date) };
 }
 
 // GET /api/work-orders/:id/excavation-permits
@@ -764,11 +802,15 @@ router.post('/:id/excavation-permits', authenticate, async (req: AuthRequest, re
     if (!perms.canEdit) return res.status(403).json({ error: 'ليس لديك صلاحية إضافة التصاريح' });
     const { permitNo, startDate, endDate } = req.body;
     if (!permitNo) return res.status(400).json({ error: 'permit_no مطلوب' });
+    const [wo] = await db.select({ assignmentDate: workOrders.assignmentDate })
+      .from(workOrders).where(eq(workOrders.id, req.params.id)).limit(1);
+    const validErr = validatePermitDates(startDate, endDate, wo?.assignmentDate ? String(wo.assignmentDate) : null);
+    if (validErr) return res.status(400).json({ error: validErr });
     const [row] = await db.insert(excavationPermits).values({
       workOrderId: req.params.id,
       permitNo,
-      startDate: startDate || null,
-      endDate:   endDate   || null,
+      startDate,
+      endDate,
       extensionNumber: 0,
       isExtension: false,
     }).returning();
@@ -785,11 +827,15 @@ router.put('/:id/excavation-permits/:permitId', authenticate, async (req: AuthRe
     const perms = await getExcavationPerms(req.user!.id, req.user!.role);
     if (!perms.canEdit) return res.status(403).json({ error: 'ليس لديك صلاحية تعديل التصاريح' });
     const { permitNo, startDate, endDate } = req.body;
+    const [wo] = await db.select({ assignmentDate: workOrders.assignmentDate })
+      .from(workOrders).where(eq(workOrders.id, req.params.id)).limit(1);
+    const validErr = validatePermitDates(startDate, endDate, wo?.assignmentDate ? String(wo.assignmentDate) : null);
+    if (validErr) return res.status(400).json({ error: validErr });
     const [row] = await db.update(excavationPermits)
       .set({
         permitNo:  permitNo  ?? undefined,
-        startDate: startDate ?? null,
-        endDate:   endDate   ?? null,
+        startDate,
+        endDate,
       })
       .where(and(
         eq(excavationPermits.id, req.params.permitId),
@@ -843,11 +889,27 @@ router.post('/:id/excavation-permits/:permitId/extend', authenticate, async (req
     if (maxExt >= 5) return res.status(400).json({ error: 'الحد الأقصى للتمديدات هو 5' });
 
     const { startDate, endDate } = req.body;
+    if (!startDate) return res.status(400).json({ error: 'تاريخ البداية مطلوب' });
+    if (!endDate)   return res.status(400).json({ error: 'تاريخ الانتهاء مطلوب' });
+
+    const lastSibling = siblings.find((s: any) => s.extensionNumber === maxExt);
+    if (lastSibling?.endDate) {
+      const lastEnd = toDateOnly(String(lastSibling.endDate));
+      if (lastEnd && startDate < lastEnd) {
+        return res.status(400).json({ error: 'تاريخ بداية التمديد لا يمكن أن يكون قبل نهاية التصريح السابق' });
+      }
+    }
+
+    const [wo] = await db.select({ assignmentDate: workOrders.assignmentDate })
+      .from(workOrders).where(eq(workOrders.id, req.params.id)).limit(1);
+    const validErr = validatePermitDates(startDate, endDate, wo?.assignmentDate ? String(wo.assignmentDate) : null);
+    if (validErr) return res.status(400).json({ error: validErr });
+
     const [row] = await db.insert(excavationPermits).values({
       workOrderId: req.params.id,
       permitNo: original.permitNo,
-      startDate: startDate || original.endDate || null,
-      endDate:   endDate   || null,
+      startDate,
+      endDate,
       extensionNumber: maxExt + 1,
       isExtension: true,
     }).returning();

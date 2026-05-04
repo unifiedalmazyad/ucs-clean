@@ -1,6 +1,6 @@
 import express from 'express';
 import { db, pool } from '../db';
-import { contracts, contractAttachments, workOrders, sectors, users, auditLogs } from '../db/schema';
+import { contracts, contractAttachments, workOrders, sectors, users, auditLogs, regions, roleDefinitions } from '../db/schema';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { eq, and, isNull, isNotNull, or, sql, gte, lte } from 'drizzle-orm';
 
@@ -32,6 +32,23 @@ async function requireCanManage(req: AuthRequest, res: express.Response): Promis
     return false;
   }
   return true;
+}
+
+// ─── Scope helper ────────────────────────────────────────────────────────────
+async function getContractScope(userId: string) {
+  const u = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  const roleDef = await db.query.roleDefinitions.findFirst({
+    where: eq(roleDefinitions.roleKey, (u as any)?.role ?? ''),
+  });
+  const scopeType = roleDef?.scopeType ?? 'ALL';
+  let sectorId: string | null = (u as any)?.sectorId ?? null;
+  if (!sectorId && (u as any)?.regionId) {
+    const reg = await db.query.regions.findFirst({
+      where: eq(regions.id, (u as any).regionId),
+    });
+    sectorId = (reg as any)?.sectorId ?? null;
+  }
+  return { scopeType, sectorId, isOwnRegion: scopeType === 'OWN_REGION' };
 }
 
 // ─── resolveContractId ────────────────────────────────────────────────────────
@@ -106,6 +123,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
   try {
     const { sectorId, archived } = req.query as Record<string, string>;
     const showArchived = archived === 'true';
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
 
     const result = await pool!.query(
       `SELECT c.*,
@@ -117,8 +136,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
        LEFT JOIN sectors s ON s.id = c.sector_id
        WHERE ($1::uuid IS NULL OR c.sector_id = $1)
          AND ($2::boolean OR c.archived_at IS NULL)
+         AND ($3::uuid IS NULL OR c.sector_id = $3)
        ORDER BY s.name_ar, c.start_date DESC`,
-      [sectorId || null, showArchived],
+      [sectorId || null, showArchived, scopeFilter],
     ) as any;
     const rows = result.rows;
 
@@ -151,6 +171,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
 router.get('/unlinked-orders', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanView(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
     const { rows } = (await pool!.query(
       `SELECT
          wo.id,
@@ -170,7 +192,9 @@ router.get('/unlinked-orders', authenticate, async (req: AuthRequest, res) => {
        LEFT JOIN sectors s ON s.id = wo.sector_id
        WHERE wo.contract_id IS NULL
          AND wo.status <> 'CANCELLED'
+         AND ($1::uuid IS NULL OR wo.sector_id = $1)
        ORDER BY unlink_reason, wo.created_at DESC`,
+      [scopeFilter],
     )) as any;
 
     const summary = {
@@ -208,9 +232,13 @@ router.get('/unlinked-orders', authenticate, async (req: AuthRequest, res) => {
 router.post('/relink/preview', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
-    const { sectorId, fromDate, toDate } = req.body as {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    const { sectorId: bodySectorId, fromDate, toDate } = req.body as {
       sectorId?: string; fromDate?: string; toDate?: string;
     };
+    const sectorId = scopeFilter ?? bodySectorId;
     if (!sectorId) return res.status(400).json({ error: 'sectorId مطلوب' });
 
     const { rows } = (await pool!.query(
@@ -269,9 +297,13 @@ router.post('/relink/preview', authenticate, async (req: AuthRequest, res) => {
 router.post('/relink/execute', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
-    const { sectorId, fromDate, toDate } = req.body as {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    const { sectorId: bodySectorId, fromDate, toDate } = req.body as {
       sectorId?: string; fromDate?: string; toDate?: string;
     };
+    const sectorId = scopeFilter ?? bodySectorId;
     if (!sectorId) return res.status(400).json({ error: 'sectorId مطلوب' });
 
     const { rowCount } = await pool!.query(
@@ -320,6 +352,8 @@ router.post('/relink/execute', authenticate, async (req: AuthRequest, res) => {
 router.get('/:id', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanView(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
     const { rows } = await pool!.query(
       `SELECT c.*, c.start_date::text, c.end_date::text,
               s.name_ar AS sector_name_ar, s.name_en AS sector_name_en
@@ -330,6 +364,9 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'العقد غير موجود' });
     const r = rows[0];
+    if (scopeFilter && r.sector_id !== scopeFilter) {
+      return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
+    }
     res.json({
       id: r.id, sectorId: r.sector_id, contractNumber: r.contract_number,
       startDate: r.start_date, endDate: r.end_date, notes: r.notes,
@@ -349,10 +386,14 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
 router.post('/', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
-    const { sectorId, contractNumber, startDate, endDate, notes } = req.body as {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    const { sectorId: bodySectorId, contractNumber, startDate, endDate, notes } = req.body as {
       sectorId: string; contractNumber: string;
       startDate: string; endDate: string; notes?: string;
     };
+    const sectorId = scopeFilter ?? bodySectorId;
 
     if (!sectorId || !contractNumber || !startDate || !endDate)
       return res.status(400).json({ error: 'sectorId, contractNumber, startDate, endDate مطلوبة' });
@@ -401,10 +442,15 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
 router.put('/:id', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
     const existing = await db.query.contracts.findFirst({
       where: eq(contracts.id, req.params.id),
     });
     if (!existing) return res.status(404).json({ error: 'العقد غير موجود' });
+    if (scopeFilter && (existing as any).sectorId !== scopeFilter)
+      return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
     if ((existing as any).archivedAt)
       return res.status(400).json({ error: 'لا يمكن تعديل عقد مؤرشف' });
 
@@ -463,6 +509,14 @@ router.put('/:id', authenticate, async (req: AuthRequest, res) => {
 router.post('/:id/archive', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    if (scopeFilter) {
+      const c = await db.query.contracts.findFirst({ where: eq(contracts.id, req.params.id) });
+      if (!c || (c as any).sectorId !== scopeFilter)
+        return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
+    }
     const [updated] = await db.update(contracts)
       .set({ archivedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(contracts.id, req.params.id), isNull(contracts.archivedAt)))
@@ -484,12 +538,17 @@ router.post('/:id/archive', authenticate, async (req: AuthRequest, res) => {
 router.post('/:id/unarchive', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
     // Unarchiving: must check overlap again since it re-enters the active pool
     const existing = await db.query.contracts.findFirst({
       where: eq(contracts.id, req.params.id),
     });
     if (!existing || !(existing as any).archivedAt)
       return res.status(404).json({ error: 'العقد غير موجود أو غير مؤرشف' });
+    if (scopeFilter && (existing as any).sectorId !== scopeFilter)
+      return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
 
     const conflict = await checkOverlap(
       (existing as any).sectorId,
@@ -528,6 +587,13 @@ router.post('/:id/unarchive', authenticate, async (req: AuthRequest, res) => {
 router.get('/:id/attachments', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanView(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    if (scopeFilter) {
+      const c = await db.query.contracts.findFirst({ where: eq(contracts.id, req.params.id) });
+      if (!c || (c as any).sectorId !== scopeFilter)
+        return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
+    }
     const atts = await db.select().from(contractAttachments)
       .where(eq(contractAttachments.contractId, req.params.id))
       .orderBy(contractAttachments.createdAt);
@@ -540,10 +606,15 @@ router.get('/:id/attachments', authenticate, async (req: AuthRequest, res) => {
 router.post('/:id/attachments', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
     const contract = await db.query.contracts.findFirst({
       where: eq(contracts.id, req.params.id),
     });
     if (!contract) return res.status(404).json({ error: 'العقد غير موجود' });
+    if (scopeFilter && (contract as any).sectorId !== scopeFilter)
+      return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
 
     const { name, url } = req.body as { name: string; url: string };
     if (!name || !url) return res.status(400).json({ error: 'name و url مطلوبان' });
@@ -564,6 +635,14 @@ router.post('/:id/attachments', authenticate, async (req: AuthRequest, res) => {
 router.delete('/:id/attachments/:aid', authenticate, async (req: AuthRequest, res) => {
   if (!await requireCanManage(req, res)) return;
   try {
+    const scope = req.user!.role !== 'ADMIN' ? await getContractScope(req.user!.id) : null;
+    if (scope?.isOwnRegion) return res.status(403).json({ error: 'ليس لديك صلاحية إدارة العقود' });
+    const scopeFilter = scope && scope.scopeType !== 'ALL' ? scope.sectorId : null;
+    if (scopeFilter) {
+      const c = await db.query.contracts.findFirst({ where: eq(contracts.id, req.params.id) });
+      if (!c || (c as any).sectorId !== scopeFilter)
+        return res.status(403).json({ error: 'ليس لديك صلاحية على هذا العقد' });
+    }
     const [deleted] = await db.delete(contractAttachments)
       .where(and(
         eq(contractAttachments.id, req.params.aid),
