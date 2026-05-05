@@ -1,20 +1,88 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# نظام العقود الموحد — UCS
 
-# Run and deploy your AI Studio app
+نظام لإدارة أوامر العمل الميدانية. يدعم متابعة المراحل، تتبع مؤشرات الأداء (KPI)، إدارة العقود وتصاريح الحفر، مع نظام صلاحيات مفصّل حسب القطاع والمنطقة.
 
-This contains everything you need to run your app locally.
+---
 
-View your app in AI Studio: https://ai.studio/apps/8e320f3e-0fef-446e-84e8-20df7c52b362
+## المتطلبات
 
-## Run Locally
+| | |
+|---|---|
+| Node.js | 20+ |
+| Docker + Docker Compose | للتشغيل مع PostgreSQL |
+| PostgreSQL 15 | يُدار عبر Docker |
 
-**Prerequisites:**  Node.js
+---
 
+## النشر على الإنتاج
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+# 1. نسخ وتعبئة متغيرات البيئة
+cp .env.example .env
+
+# 2. بناء وتشغيل
+docker compose -f docker-compose.server-working.yml up -d --build
+
+# 3. التحقق من الصحة
+curl http://localhost:3010/api/health
+# المتوقع: {"status":"ok","db":"connected"}
+```
+
+---
+
+## التشغيل المحلي للتطوير
+
+```bash
+# تثبيت التبعيات
+npm install
+
+# تشغيل (backend + Vite في نفس العملية)
+npm run dev
+```
+
+للتفاصيل الكاملة (متغيرات البيئة المحلية، إعداد Docker، المستخدمين) راجع [DEV_SETUP.md](DEV_SETUP.md).
+
+> **ملاحظة:** في وضع التطوير — إذا لم يُضبط `DATABASE_URL` — يعمل النظام على SQLite محلي.
+> هذا fallback مؤقت سيُزال في مرحلة Cleanup القادمة.
+
+---
+
+## المتغيرات المطلوبة
+
+| المتغير | الوصف | مطلوب في Production |
+|---|---|---|
+| `DATABASE_URL` | رابط اتصال PostgreSQL | ✅ |
+| `JWT_SECRET` | مفتاح JWT (64 حرف+) | ✅ |
+| `ADMIN_DEFAULT_PASSWORD` | كلمة مرور admin (12 حرف+) | ✅ |
+| `POSTGRES_PASSWORD` | كلمة مرور قاعدة البيانات | ✅ |
+
+انظر [`.env.example`](.env.example) للقائمة الكاملة.
+
+---
+
+## هيكل المشروع
+
+```
+backend/src/
+  server.ts            # نقطة دخول Express
+  db/index.ts          # إعداد قاعدة البيانات
+  db/schema_pg.ts      # تعريف الجداول (Drizzle ORM)
+  routes/              # API endpoints
+  middleware/auth.ts   # JWT authentication
+
+src/
+  pages/               # صفحات React (Vite SPA)
+  components/          # مكونات مشتركة
+
+backend/src/db/migrations/   # ملفات SQL migrations
+```
+
+---
+
+## أوامر مفيدة
+
+```bash
+npm run dev     # تشغيل محلي
+npm run build   # بناء frontend (Vite)
+npm run lint    # فحص TypeScript (tsc --noEmit)
+```
