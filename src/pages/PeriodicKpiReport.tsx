@@ -63,7 +63,19 @@ interface ReportHeader {
 }
 
 interface DateBasisOption { type: string; labelAr: string; labelEn: string; columnKey: string | null }
-interface MetricResult { code: string; nameAr: string; nameEn?: string; metricType?: 'DATE_DIFF' | 'NUMERIC_AGG'; aggFunction?: string | null; avgDays: number | null; totalDays: number; count: number; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null; activeTotal?: number | null; completedTotal?: number | null; activeCount?: number; completedCount?: number; }
+interface MetricResult {
+  code: string; nameAr: string; nameEn?: string;
+  metricType?: 'DATE_DIFF' | 'NUMERIC_AGG'; aggFunction?: string | null;
+  avgDays: number | null; totalDays: number; count: number;
+  thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null;
+  // NUMERIC_AGG SUM split
+  activeTotal?: number | null; completedTotal?: number | null;
+  activeCount?: number; completedCount?: number;
+  // DATE_DIFF split
+  canSplit?: boolean;
+  avgDaysCompleted?: number | null;
+  avgDaysActive?: number | null;
+}
 interface Config {
   execRules: any[]; finRule: any | null; settings: any | null; stages: any[];
   projectTypes: { value: string; labelAr: string; labelEn?: string }[];
@@ -175,6 +187,13 @@ const STATUS_MAP: Record<string, { label: string; labelEn: string; color: string
 };
 
 const METRIC_COLOR = { red: 'text-red-600 bg-red-50', amber: 'text-amber-600 bg-amber-50', green: 'text-emerald-600 bg-emerald-50', null: 'text-slate-600 bg-slate-50' };
+
+function metricStatusColor(avgDays: number | null | undefined, threshold: number | null): 'red' | 'amber' | 'green' | null {
+  if (!threshold || avgDays == null) return null;
+  if (avgDays > threshold) return 'red';
+  if (avgDays > threshold * 0.8) return 'amber';
+  return 'green';
+}
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -327,6 +346,81 @@ function MetricCard({ m, onClick }: { m: MetricResult; onClick?: () => void }) {
         {isNumeric && m.aggFunction && (
           <span className="px-1.5 py-0.5 bg-violet-50 text-violet-600 rounded font-mono text-[10px]">{m.aggFunction}</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+function DualMetricCard({ m, onClickCompleted, onClickActive }: {
+  m: MetricResult;
+  onClickCompleted?: () => void;
+  onClickActive?: () => void;
+}) {
+  const { lang } = useLang();
+  const { noteByCode } = React.useContext(MetricCfgCtx);
+  const note = noteByCode[m.code] ?? null;
+  const title = lang === 'en' && m.nameEn ? m.nameEn : m.nameAr;
+  const completedLabel = lang === 'en' ? 'Completed' : 'منفذ';
+  const activeLabel    = lang === 'en' ? 'In Progress' : 'قيد التنفيذ';
+  const daysUnit       = lang === 'en' ? 'd' : 'يوم';
+
+  const clsC = METRIC_COLOR[(metricStatusColor(m.avgDaysCompleted ?? null, m.thresholdDays) ?? 'null') as keyof typeof METRIC_COLOR];
+  const clsA = METRIC_COLOR[(metricStatusColor(m.avgDaysActive    ?? null, m.thresholdDays) ?? 'null') as keyof typeof METRIC_COLOR];
+
+  const hasC = m.avgDaysCompleted != null;
+  const hasA = m.avgDaysActive    != null;
+
+  const Panel = ({ label, avgDays, count, cls, onClick }: {
+    label: string; avgDays: number | null; count: number; cls: string; onClick?: () => void;
+  }) => (
+    hasC || hasA
+      ? (
+        <button
+          className="flex-1 rounded-lg border border-slate-100 bg-slate-50 p-2.5 flex flex-col gap-1 hover:ring-2 hover:ring-indigo-300 transition-shadow text-right min-w-0"
+          onClick={onClick}
+        >
+          <span className="text-[10px] font-semibold text-slate-400">{label}</span>
+          <span className={`text-xl font-bold ${cls.split(' ')[0]}`}>
+            {avgDays != null ? avgDays : '—'}
+            {avgDays != null && <span className="text-[11px] font-normal text-slate-400 mr-1">{daysUnit}</span>}
+          </span>
+          <span className="text-[10px] text-slate-400">{count} {lang === 'en' ? 'tx' : 'معاملة'}</span>
+          {m.thresholdDays && avgDays != null && (
+            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full self-start ${cls}`}>
+              {lang === 'en' ? 'Limit: ' : 'الحد: '}{m.thresholdDays} {daysUnit}
+            </span>
+          )}
+        </button>
+      )
+      : <div className="flex-1 rounded-lg border border-dashed border-slate-100 p-2.5 flex items-center justify-center">
+          <span className="text-[10px] text-slate-300">{label}: —</span>
+        </div>
+  );
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-3 flex flex-col gap-2 w-full h-full">
+      <div className="flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-xs font-medium text-slate-500 truncate">{title}</span>
+          {note && (
+            <span className="relative group shrink-0">
+              <svg className="w-3.5 h-3.5 text-slate-300 hover:text-indigo-400 cursor-help transition-colors" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              <span className={`pointer-events-none absolute z-50 bottom-full mb-2 ${lang === 'en' ? 'left-0' : 'right-0'} w-56 bg-slate-800 text-white text-[11px] leading-snug rounded-lg px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl whitespace-normal`} dir="rtl">
+                {note}
+                <span className={`absolute top-full ${lang === 'en' ? 'left-2' : 'right-2'} border-4 border-transparent border-t-slate-800`} />
+              </span>
+            </span>
+          )}
+        </div>
+        <Clock className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+      </div>
+      <div className="h-px bg-slate-100" />
+      <div className="flex flex-row gap-2">
+        <Panel label={completedLabel} avgDays={m.avgDaysCompleted ?? null} count={m.completedCount ?? 0} cls={clsC} onClick={onClickCompleted} />
+        {hasC && hasA && <div className="w-px bg-slate-100 self-stretch" />}
+        <Panel label={activeLabel}    avgDays={m.avgDaysActive    ?? null} count={m.activeCount    ?? 0} cls={clsA} onClick={onClickActive} />
       </div>
     </div>
   );
@@ -1116,9 +1210,11 @@ export default function PeriodicKpiReport() {
   const [metricDrawerColKeys, setMetricDrawerColKeys] = useState<string[]>([
     'orderNumber', 'regionNameAr', 'sectorNameAr', 'projectType', 'assignmentDate', 'metricDays',
   ]);
+  const KD_PHASE_STATUS: KpiCol = { key: 'isPhaseCompleted', labelAr: 'حالة المرحلة', labelEn: 'Phase Status', dataType: 'text', virtual: true };
   const metricDrawerAvailCols: KpiCol[] = useMemo(() => [
     ...kdBaseCols,
     KD_METRIC_DAYS,
+    KD_PHASE_STATUS,
   ], [kdBaseCols]);
 
   // Billing drawer
@@ -1527,8 +1623,23 @@ export default function PeriodicKpiReport() {
 
     if (timeDiff.length > 0) {
       rows.push([en ? '── PERFORMANCE TIME AVERAGES ──' : '── متوسطات الأداء الزمنية ──']);
-      rows.push(timeDiff.map(m => mn(m)));
-      rows.push(timeDiff.map(m => m.avgDays != null ? `${m.avgDays} ${en ? 'days' : 'يوم'}` : '—'));
+      const tdHeaders: string[] = [];
+      const tdValues: string[] = [];
+      for (const m of timeDiff) {
+        if (m.canSplit) {
+          const base = mn(m);
+          tdHeaders.push(`${base} — ${en ? 'Completed' : 'منفذ'}`, `${base} — ${en ? 'In Progress' : 'قيد التنفيذ'}`);
+          tdValues.push(
+            m.avgDaysCompleted != null ? `${m.avgDaysCompleted} ${en ? 'days' : 'يوم'}` : '—',
+            m.avgDaysActive    != null ? `${m.avgDaysActive}    ${en ? 'days' : 'يوم'}` : '—',
+          );
+        } else {
+          tdHeaders.push(mn(m));
+          tdValues.push(m.avgDays != null ? `${m.avgDays} ${en ? 'days' : 'يوم'}` : '—');
+        }
+      }
+      rows.push(tdHeaders);
+      rows.push(tdValues);
       rows.push([]);
     }
     if (numeric.length > 0) {
@@ -1981,25 +2092,25 @@ export default function PeriodicKpiReport() {
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Performance Time Averages' : 'متوسطات الأداء الزمنية'}</span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 items-stretch">
-                        {(() => {
-                          const cards: React.ReactElement[] = [];
-                          for (const m of dateDiff) {
-                            cards.push(<div key={m.code}><MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} /></div>);
-                            if (m.code === 'SURVEY' && summary.kpiAlerts?.unSurveyed && summary.kpiAlerts.unSurveyed.count > 0) {
-                              cards.push(<div key="PENDING_SURVEY"><MetricCard
-                                m={{ code: 'PENDING_SURVEY', nameAr: 'غير الممسوحة', nameEn: 'Unsurveyed', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unSurveyed.avgDays, totalDays: 0, count: summary.kpiAlerts.unSurveyed.count, thresholdDays: summary.kpiAlerts.unSurveyed.thresholdDays, statusColor: summary.kpiAlerts.unSurveyed.statusColor }}
-                                onClick={openPendingSurveyDrawer}
-                              /></div>);
-                            }
-                            if (m.code === 'COORDINATION' && summary.kpiAlerts?.unCoordinated && summary.kpiAlerts.unCoordinated.count > 0) {
-                              cards.push(<div key="PENDING_COORD"><MetricCard
-                                m={{ code: 'PENDING_COORD', nameAr: 'غير المنسقة', nameEn: 'Uncoordinated', metricType: 'DATE_DIFF', aggFunction: null, avgDays: summary.kpiAlerts.unCoordinated.avgDays, totalDays: 0, count: summary.kpiAlerts.unCoordinated.count, thresholdDays: summary.kpiAlerts.unCoordinated.thresholdDays, statusColor: summary.kpiAlerts.unCoordinated.statusColor }}
-                                onClick={openPendingCoordDrawer}
-                              /></div>);
-                            }
+                        {dateDiff.map(m => {
+                          if (m.canSplit) {
+                            const mn = lang === 'en' && m.nameEn ? m.nameEn : m.nameAr;
+                            return (
+                              <div key={m.code}>
+                                <DualMetricCard
+                                  m={m}
+                                  onClickCompleted={() => openMetricDrawer(m.code, `${mn} — ${lang === 'en' ? 'Completed' : 'منفذ'}`, null, 'completed')}
+                                  onClickActive={()    => openMetricDrawer(m.code, `${mn} — ${lang === 'en' ? 'In Progress' : 'قيد التنفيذ'}`, null, 'active')}
+                                />
+                              </div>
+                            );
                           }
-                          return cards;
-                        })()}
+                          return (
+                            <div key={m.code}>
+                              <MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} />
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -2014,8 +2125,9 @@ export default function PeriodicKpiReport() {
                           // SUM metrics with split data → render two length cards
                           if (m.aggFunction === 'SUM' && m.activeTotal != null && m.completedTotal != null) {
                             const fmtLen = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 1 });
-                            const activeName    = lang === 'en' ? 'Incomplete Length (m)' : 'إجمالي الأطوال غير المنجزة';
-                            const completedName = lang === 'en' ? 'Completed Length (m)'  : 'إجمالي الأطوال المكتملة';
+                            const baseName = lang === 'en' && m.nameEn ? m.nameEn : m.nameAr;
+                            const activeName    = `${baseName} — ${lang === 'en' ? 'In Progress' : 'قيد التنفيذ'}`;
+                            const completedName = `${baseName} — ${lang === 'en' ? 'Completed'   : 'منفذ'}`;
                             return (
                               <React.Fragment key={m.code}>
                                 {/* غير المنجزة — no proc155 */}
@@ -3180,6 +3292,14 @@ export default function PeriodicKpiReport() {
         onColKeysChange={setMetricDrawerColKeys}
         lang={lang}
         reportHeader={reportHdr ?? undefined}
+        renderCell={(row, col) => {
+          if (col.key === 'isPhaseCompleted' && row.isPhaseCompleted !== undefined) {
+            return row.isPhaseCompleted
+              ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">{lang === 'en' ? 'Completed' : 'منفذ'}</span>
+              : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">{lang === 'en' ? 'In Progress' : 'قيد التنفيذ'}</span>;
+          }
+          return null;
+        }}
       />
 
       {/* ── Pending Survey Drawer ────────────────────────────────────────────── */}

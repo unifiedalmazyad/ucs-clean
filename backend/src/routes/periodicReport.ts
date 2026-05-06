@@ -266,46 +266,69 @@ export interface MetricResult {
   aggFunction?: string | null;
   avgDays: number | null; totalDays: number; count: number;
   thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null;
-  // Populated for NUMERIC_AGG SUM metrics: split by proc155CloseDate presence
-  activeTotal?: number | null;    // sum for غير منجز: proc155CloseDate IS NULL
-  completedTotal?: number | null; // sum for منجز:    proc155CloseDate IS NOT NULL
+  // NUMERIC_AGG SUM: split by proc155CloseDate presence
+  activeTotal?: number | null;
+  completedTotal?: number | null;
   activeCount?: number;
   completedCount?: number;
+  // DATE_DIFF split: endColumnKey resolved = منفذ, absent = قيد التنفيذ
+  canSplit?: boolean;
+  avgDaysCompleted?: number | null;
+  avgDaysActive?: number | null;
 }
 
 function aggregateMetrics(
   wos: any[], metrics: any[], stageMap: Map<string, any>, now: Date,
   physicalKeyMap?: Map<string, string>,
   fallbackSlaDays?: number | null,
-  projectTypeValue?: string | null,
 ): MetricResult[] {
-  // Operational metrics ALWAYS exclude cancelled work orders — regardless of includeCancelled flag.
-  // Cancelled records may appear in count summaries only; they must never skew averages or SLA calculations.
+  // Cancelled WOs never contribute to metric averages.
   const operationalWOs = wos.filter(wo => !stageMap.get(wo.stageId ?? '')?.isCancelled);
 
   return metrics
     .filter(m => m.isEnabled)
-    .filter(m => {
-      // Skip metric if this project type is in its excludedProjectTypes list
-      if (!projectTypeValue) return true;
-      try {
-        const excluded: string[] = JSON.parse(m.excludedProjectTypes || '[]');
-        return !excluded.includes(projectTypeValue);
-      } catch { return true; }
-    })
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .map(metric => {
-      if (metric.metricType === 'NUMERIC_AGG') return computeNumericAgg(operationalWOs, metric, physicalKeyMap);
+      // Per-metric: exclude WOs whose projectType is in this metric's excludedProjectTypes list.
+      // Always applied per-WO (regardless of whether a projectType filter is active globally).
+      let excluded: string[] = [];
+      try { excluded = JSON.parse(metric.excludedProjectTypes || '[]'); } catch { /* ignore */ }
+      const eligibleWOs = excluded.length > 0
+        ? operationalWOs.filter(wo => {
+            const pt = wo.projectType ?? (wo as any).project_type ?? null;
+            return !pt || !excluded.includes(pt);
+          })
+        : operationalWOs;
 
-      // DATE_DIFF
+      if (metric.metricType === 'NUMERIC_AGG') return computeNumericAgg(eligibleWOs, metric, physicalKeyMap);
+
+      // DATE_DIFF — split into منفذ (end resolved) and قيد التنفيذ (end absent) when possible
+      const canSplit = metric.endMode !== 'TODAY' && !!metric.endColumnKey;
+
       let totalDays = 0, count = 0;
-      for (const wo of operationalWOs) {
-        const days = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
-        if (days !== null) { totalDays += days; count++; }
+      let totalDaysCompleted = 0, countCompleted = 0;
+      let totalDaysActive = 0, countActive = 0;
+
+      for (const wo of eligibleWOs) {
+        const start = resolveDate(wo, metric.startMode, metric.startColumnKey, metric.startStageId, stageMap, physicalKeyMap);
+        if (!start) continue;
+
+        if (canSplit) {
+          const endResolved = resolveDate(wo, metric.endMode, metric.endColumnKey, metric.endStageId, stageMap, physicalKeyMap);
+          if (endResolved !== null) {
+            const days = (endResolved.getTime() - start.getTime()) / 86_400_000;
+            if (days >= 0) { totalDaysCompleted += days; countCompleted++; totalDays += days; count++; }
+          } else {
+            const days = (now.getTime() - start.getTime()) / 86_400_000;
+            if (days >= 0) { totalDaysActive += days; countActive++; totalDays += days; count++; }
+          }
+        } else {
+          const days = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
+          if (days !== null) { totalDays += days; count++; }
+        }
       }
+
       const avgDays = count > 0 ? Math.round(totalDays / count) : null;
-      // useExecSla=true → always use project-type SLA (ignore thresholdDays).
-      // useExecSla=false (default) → use metric's own thresholdDays; no fallback.
       const effectiveThreshold: number | null = (metric.useExecSla && fallbackSlaDays && fallbackSlaDays > 0)
         ? fallbackSlaDays
         : ((metric.thresholdDays && metric.thresholdDays > 0) ? metric.thresholdDays : null);
@@ -315,7 +338,20 @@ function aggregateMetrics(
         else if (avgDays > effectiveThreshold * 0.8) statusColor = 'amber';
         else statusColor = 'green';
       }
-      return { code: metric.code, nameAr: metric.nameAr, nameEn: metric.nameEn ?? null, metricType: 'DATE_DIFF' as const, aggFunction: null, avgDays, totalDays, count, thresholdDays: effectiveThreshold, statusColor };
+
+      return {
+        code: metric.code, nameAr: metric.nameAr, nameEn: metric.nameEn ?? null,
+        metricType: 'DATE_DIFF' as const, aggFunction: null,
+        avgDays, totalDays, count,
+        thresholdDays: effectiveThreshold, statusColor,
+        canSplit,
+        ...(canSplit ? {
+          avgDaysCompleted: countCompleted > 0 ? Math.round(totalDaysCompleted / countCompleted) : null,
+          avgDaysActive:    countActive    > 0 ? Math.round(totalDaysActive    / countActive)    : null,
+          completedCount: countCompleted,
+          activeCount:    countActive,
+        } : {}),
+      };
     });
 }
 
@@ -1172,12 +1208,13 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
     for (const r of allRegions) regionMapMO.set(r.id, { id: r.id, nameAr: r.nameAr as string | null, sectorId: (r as any).sectorId ?? null });
     const sectorMapMO = new Map<string, string | null>(allSectors.map((s: any) => [s.id, s.nameAr as string | null]));
 
-    // 'active'    → include only غير منجز (proc155CloseDate IS NULL)
-    // 'completed' → include only منجز    (proc155CloseDate IS NOT NULL)
-    // 'all'       → no proc155 filter (DATE_DIFF default)
+    // 'active'    → قيد التنفيذ: for NUMERIC_AGG=proc155 absent; for DATE_DIFF=endColumnKey absent
+    // 'completed' → منفذ:        for NUMERIC_AGG=proc155 present; for DATE_DIFF=endColumnKey present
+    // 'all'       → no filter
     const lengthFilter = (req.query.filter as string | undefined) ?? 'all';
 
     const isNumericAgg = metric.metricType === 'NUMERIC_AGG';
+    const canSplit = !isNumericAgg && metric.endMode !== 'TODAY' && !!metric.endColumnKey;
     const vKey = isNumericAgg ? (metric.valueColumnKey ?? '') : '';
     const camelVKey = toCamel(vKey);
     const physVKey  = physicalKeyMap.get(vKey) ?? null;
@@ -1196,21 +1233,27 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
       if (metricExcluded.length > 0 && woProjectType && metricExcluded.includes(woProjectType)) continue;
 
       let metricDays: number | null = null;
+      let isPhaseCompleted: boolean | undefined = undefined;
 
       if (isNumericAgg) {
-        // NUMERIC_AGG: use valueColumnKey to get the numeric value
         const rawVal = resolveNumericValue(wo, camelVKey, camelPhysVKey, physVKey);
         if (isNaN(rawVal) || !isFinite(rawVal)) continue;
         metricDays = rawVal;
 
-        // Apply proc155 filter for length-split cards
         const hasProc155 = !!(wo.proc155CloseDate ?? (wo as any).proc_155_close_date);
-        if (lengthFilter === 'active'    &&  hasProc155) continue; // want non-completed only
-        if (lengthFilter === 'completed' && !hasProc155) continue; // want completed only
+        if (lengthFilter === 'active'    &&  hasProc155) continue;
+        if (lengthFilter === 'completed' && !hasProc155) continue;
       } else {
-        // DATE_DIFF: existing logic
+        // DATE_DIFF
         metricDays = computeMetricDays(wo, metric, stageMap, now, physicalKeyMap);
         if (metricDays === null) continue;
+
+        if (canSplit) {
+          const endResolved = resolveDate(wo, metric.endMode, metric.endColumnKey, metric.endStageId, stageMap, physicalKeyMap);
+          isPhaseCompleted = endResolved !== null;
+          if (lengthFilter === 'completed' && !isPhaseCompleted) continue;
+          if (lengthFilter === 'active'    &&  isPhaseCompleted) continue;
+        }
       }
 
       const region      = wo.regionId ? regionMapMO.get(wo.regionId) : null;
@@ -1219,15 +1262,22 @@ router.get('/kpi-alerts/metric-orders', authenticate, async (req: AuthRequest, r
       const cf = (wo as any).customFields ?? (wo as any).custom_fields;
       const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
 
-      rows.push({ ...wo, ...customMerged, regionNameAr: region?.nameAr ?? null, sectorNameAr: sectorNameAr ?? null, metricDays: Math.round(metricDays) });
+      rows.push({
+        ...wo, ...customMerged,
+        regionNameAr: region?.nameAr ?? null,
+        sectorNameAr: sectorNameAr ?? null,
+        metricDays: Math.round(metricDays),
+        ...(isPhaseCompleted !== undefined ? { isPhaseCompleted } : {}),
+      });
     }
 
     const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
     const safeRows = filteredRows.map((r: any, i: number) => ({
       ...r,
-      regionNameAr: rows[i].regionNameAr,
-      sectorNameAr: rows[i].sectorNameAr,
-      metricDays:   rows[i].metricDays,
+      regionNameAr:    rows[i].regionNameAr,
+      sectorNameAr:    rows[i].sectorNameAr,
+      metricDays:      rows[i].metricDays,
+      ...(rows[i].isPhaseCompleted !== undefined ? { isPhaseCompleted: rows[i].isPhaseCompleted } : {}),
     }));
 
     res.json({ rows: safeRows, count: safeRows.length, metricNameAr: metric.nameAr, metricNameEn: metric.nameEn ?? null });
@@ -1609,7 +1659,7 @@ router.get('/region/:id/details', authenticate, async (req: AuthRequest, res: Re
         projectTypeValue: ptValue, projectTypeLabelAr: ptLabel, configured: true,
         slaDays: rule.slaDays, warningDays: rule.warningDays, ...counts,
         avgDays: daysCount > 0 ? Math.round(totalDays / daysCount) : null,
-        metricsAverages: aggregateMetrics(metricsWOs, metrics, stageMap, now, physicalKeyMap, rule.slaDays, ptValue),
+        metricsAverages: aggregateMetrics(metricsWOs, metrics, stageMap, now, physicalKeyMap, rule.slaDays),
         finCounts: finRule.isEnabled ? ptFinCounts : null,
       });
     }
