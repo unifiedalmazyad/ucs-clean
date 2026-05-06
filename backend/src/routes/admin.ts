@@ -54,25 +54,15 @@ router.post('/columns/sync', authenticate, authorize(['ADMIN']), async (req, res
   const { table } = req.query;
   if (table !== 'work_orders') return res.status(400).json({ error: 'Only work_orders supported' });
 
-  const isDemo = process.env.DEMO_MODE === 'true' || !process.env.DATABASE_URL;
-
   try {
     let dbColumns: any[] = [];
-    
-    if (isDemo) {
-      const info = await db.execute(sql`PRAGMA table_info(work_orders)`);
-      dbColumns = info.map((col: any) => ({
-        column_name: col.name,
-        data_type: col.type
-      }));
-    } else {
-      const info = await db.execute(sql`
-        SELECT column_name, data_type 
-        FROM information_schema.columns 
-        WHERE table_name = 'work_orders'
-      `);
-      dbColumns = info.rows;
-    }
+
+    const info = await db.execute(sql`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_name = 'work_orders'
+    `);
+    dbColumns = info.rows;
 
     const existingCatalog = await db.select().from(columnCatalog).where(eq(columnCatalog.tableName, 'work_orders'));
     

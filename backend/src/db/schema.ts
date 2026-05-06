@@ -1,9 +1,4 @@
 import * as schemaPg from './schema_pg';
-import * as schemaSqlite from './schema_sqlite';
-
-const isDemo = process.env.DEMO_MODE === 'true' || !process.env.DATABASE_URL;
-
-const schema = isDemo ? schemaSqlite : schemaPg;
 
 export const {
   users,
@@ -42,4 +37,4 @@ export const {
   contracts,
   contractAttachments,
   systemSettings,
-} = schema as any;
+} = schemaPg as any;
