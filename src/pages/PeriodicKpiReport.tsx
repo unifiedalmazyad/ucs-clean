@@ -2091,7 +2091,7 @@ export default function PeriodicKpiReport() {
                         <Clock className="w-3.5 h-3.5 text-indigo-400" />
                         <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Performance Time Averages' : 'متوسطات الأداء الزمنية'}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 items-stretch">
+                      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-3 items-stretch">
                         {dateDiff.map(m => {
                           if (m.canSplit) {
                             const mn = lang === 'en' && m.nameEn ? m.nameEn : m.nameAr;
