@@ -6,6 +6,7 @@ import type ExcelJS from 'exceljs';
 
 export interface KpiCol {
   key: string;
+  dataKey?: string;  // physical row key — camelCase(physicalKey || columnKey)
   labelAr: string;
   labelEn: string;
   dataType?: string;
@@ -84,7 +85,7 @@ const STATUS_LABELS: Record<string, { ar: string; en: string; cls: string }> = {
 };
 
 function defaultRenderCell(row: any, col: KpiCol, lang: string): React.ReactNode {
-  const v = getVal(row, col.key);
+  const v = getVal(row, col.dataKey ?? col.key);
 
   // generalStatus → colored badge
   if (col.key === 'generalStatus') {
@@ -277,7 +278,7 @@ export default function KpiDrawer({
       row.height = 17;
       visibleCols.forEach((col, ci) => {
         const cell = row.getCell(ci + 1);
-        const v = getVal(r, col.key);
+        const v = getVal(r, col.dataKey ?? col.key);
         if (isDateCol(col)) cell.value = fmtDate(v);
         else if (isNumCol(col)) cell.value = v != null && v !== '' ? Number(v) : '';
         else cell.value = v ?? '';
@@ -335,7 +336,7 @@ export default function KpiDrawer({
     const headers = visibleCols.map(c => isAr ? c.labelAr : c.labelEn);
     const tableRows = rows.map((r, i) => {
       const cells = visibleCols.map(c => {
-        const v = getVal(r, c.key);
+        const v = getVal(r, c.dataKey ?? c.key);
         const isN = isNumCol(c); const isD = isDateCol(c);
         return `<td style="text-align:${isN ? 'left' : 'right'};direction:${isN || isD ? 'ltr' : 'rtl'}">${fmtCell(v, c)}</td>`;
       }).join('');
@@ -482,7 +483,7 @@ export default function KpiDrawer({
                   {rows.map((row, i) => (
                     <tr key={row.orderNumber ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
                       {visibleCols.map(col => {
-                        const v = getVal(row, col.key);
+                        const v = getVal(row, col.dataKey ?? col.key);
                         const isNum  = isNumCol(col);
                         const isDate = isDateCol(col);
                         const isOrder = col.key === 'orderNumber';

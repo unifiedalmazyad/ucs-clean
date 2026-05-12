@@ -910,25 +910,34 @@ router.get('/kpi-alerts/closed-not-invoiced', authenticate, async (req: AuthRequ
       const region       = wo.regionId ? regionMap.get(wo.regionId) : null;
       const sectorNameAr = region?.sectorId ? sectorMap.get(region.sectorId) : null;
 
+      // Merge customFields JSONB so dynamic catalog columns are accessible
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
       rows.push({
-        orderNumber:        wo.orderNumber,
-        district:           wo.district,
-        regionNameAr:       region?.nameAr ?? null,
-        sectorNameAr:       sectorNameAr ?? null,
-        invoiceType:        invType ?? null,
-        proc155CloseDate:   wo.proc155CloseDate,
-        financialCloseDate: (wo as any).financialCloseDate ?? null,
-        invoiceNumber:      wo.invoiceNumber ?? null,
-        invoice1:           inv1Val || null,
-        invoice2Number:     wo.invoice2Number ?? null,
-        invoice2:           inv2Val || null,
-        estimatedValue:     estimated || null,
-        approxValue:        estimated,
+        ...wo,
+        ...customMerged,
+        // Computed/joined fields — override WO-level values where needed
+        regionNameAr:  region?.nameAr ?? null,
+        sectorNameAr:  sectorNameAr ?? null,
+        invoiceType:   invType ?? null,
+        invoice1:      inv1Val || null,
+        invoice2:      inv2Val || null,
+        estimatedValue: estimated || null,
+        approxValue:   estimated,
       });
     }
 
-    const totalValue = rows.reduce((s, r) => s + r.approxValue, 0);
-    res.json({ rows, count: rows.length, totalValue });
+    const totalValue = rows.reduce((s, r) => s + (r.approxValue ?? 0), 0);
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    // Re-attach computed fields stripped by filterOutput (not in column_catalog)
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr: rows[i].regionNameAr,
+      sectorNameAr: rows[i].sectorNameAr,
+      approxValue:  rows[i].approxValue,
+    }));
+    res.json({ rows: safeRows, count: safeRows.length, totalValue });
   } catch (err) {
     console.error('[KPI DRILL-DOWN closed-not-invoiced]', err);
     res.status(500).json({ error: 'Failed to fetch drill-down data' });
@@ -981,23 +990,32 @@ router.get('/kpi-alerts/invoiced-no-cert', authenticate, async (req: AuthRequest
       const region       = wo.regionId ? regionMap2.get(wo.regionId) : null;
       const sectorNameAr = region?.sectorId ? sectorMap2.get(region.sectorId) : null;
 
+      // Merge customFields JSONB so dynamic catalog columns are accessible
+      const cf = (wo as any).customFields ?? (wo as any).custom_fields;
+      const customMerged = cf ? (typeof cf === 'string' ? JSON.parse(cf) : cf) ?? {} : {};
+
       rows.push({
-        orderNumber:          wo.orderNumber,
-        district:             wo.district,
-        regionNameAr:         region?.nameAr ?? null,
-        sectorNameAr:         sectorNameAr ?? null,
-        invoiceType:          invType ?? null,
-        proc155CloseDate:     wo.proc155CloseDate,
-        invoiceNumber:        wo.invoiceNumber ?? null,
-        invoice1:             inv1Val,
-        invoiceBillingDate:   wo.invoiceBillingDate ?? null,
-        approxInvoice2:       inv1Val,   // تقدير م.2 = م.1
-        completionCertConfirm: wo.completionCertConfirm ?? null,
+        ...wo,
+        ...customMerged,
+        // Computed/joined fields — override WO-level values where needed
+        regionNameAr:   region?.nameAr ?? null,
+        sectorNameAr:   sectorNameAr ?? null,
+        invoiceType:    invType ?? null,
+        invoice1:       inv1Val,
+        approxInvoice2: inv1Val,  // تقدير م.2 = م.1
       });
     }
 
-    const totalValue = rows.reduce((s, r) => s + r.invoice1, 0);
-    res.json({ rows, count: rows.length, totalValue });
+    const totalValue = rows.reduce((s, r) => s + (r.invoice1 ?? 0), 0);
+    const filteredRows = await filterOutput(rows, req.user!.id, req.user!.role, 'work_orders');
+    // Re-attach computed fields stripped by filterOutput (not in column_catalog)
+    const safeRows = filteredRows.map((r: any, i: number) => ({
+      ...r,
+      regionNameAr:   rows[i].regionNameAr,
+      sectorNameAr:   rows[i].sectorNameAr,
+      approxInvoice2: rows[i].approxInvoice2,
+    }));
+    res.json({ rows: safeRows, count: safeRows.length, totalValue });
   } catch (err) {
     console.error('[KPI DRILL-DOWN invoiced-no-cert]', err);
     res.status(500).json({ error: 'Failed to fetch drill-down data' });

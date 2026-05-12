@@ -1057,7 +1057,7 @@ export default function PeriodicKpiReport() {
   const [finColKeys,     setFinColKeys]     = useState<string[]>(ALL_FIN_COLS.map(c => c.key));
   const [reasonsColKeys, setReasonsColKeys] = useState<string[]>(DEFAULT_REASONS_COLS);
   const [pickerOpen,     setPickerOpen]     = useState<'EXEC' | 'FIN' | 'REASONS' | null>(null);
-  const [catalogCols,    setCatalogCols]    = useState<{ key: string; labelAr: string; labelEn: string; dataType?: string }[]>([]);
+  const [catalogCols,    setCatalogCols]    = useState<{ key: string; dataKey?: string; labelAr: string; labelEn: string; dataType?: string }[]>([]);
 
   // ── KPI drill-down drawer state (مغلقة لم تُفوتر) ───────────────────────
   const [kpiDrawerOpen,    setKpiDrawerOpen]    = useState(false);
@@ -1444,7 +1444,8 @@ export default function PeriodicKpiReport() {
           ? catalogRes.data
           : (catalogRes.data?.columns ?? []);
         setCatalogCols(rawCatalog.map(c => ({
-          key: toCamelCase(c.columnKey ?? c.key ?? ''),
+          key:     toCamelCase(c.columnKey ?? c.key ?? ''),
+          dataKey: toCamelCase(c.physicalKey ?? c.columnKey ?? c.key ?? ''),
           labelAr: c.labelAr ?? c.label ?? '',
           labelEn: c.labelEn ?? c.label ?? '',
           dataType: c.dataType ?? c.type ?? '',
