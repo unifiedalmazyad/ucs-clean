@@ -90,10 +90,16 @@ interface FinSumCounts { total: number; completed: number; overdue: number; warn
 interface PendingAlert { count: number; avgDays: number | null; thresholdDays: number | null; statusColor: 'red' | 'amber' | 'green' | null; }
 interface KpiAlerts { closedNotInvoiced: number; invoicedNoCert: number; closedNotInvoicedValue: number; invoicedNoCertValue: number; completedWithCert?: number; completedWithCertValue?: number; unSurveyed?: PendingAlert; unCoordinated?: PendingAlert; }
 interface ExecBreakdown { overdue: number; warning: number; onTime: number; completed: number; }
+interface PtExecAverage extends MetricResult {
+  projectTypeValue: string;
+  projectTypeLabelAr: string;
+  slaDays: number;
+}
 interface Summary {
   total: number; active: number; completed: number;
   overdue: number; warning: number; onTime: number; unconfigured: number;
   avgDays: number | null; metricsAverages: MetricResult[]; from: string; to: string;
+  ptExecAverages?: PtExecAverage[];
   billingCounts?: { partialBilled: number; notFullyBilled: number };
   finEnabled?: boolean;
   finCounts?: FinSumCounts | null;     // fin phase breakdown (informational)
@@ -351,14 +357,15 @@ function MetricCard({ m, onClick }: { m: MetricResult; onClick?: () => void }) {
   );
 }
 
-function DualMetricCard({ m, onClickCompleted, onClickActive }: {
+function DualMetricCard({ m, onClickCompleted, onClickActive, note: noteProp }: {
   m: MetricResult;
   onClickCompleted?: () => void;
   onClickActive?: () => void;
+  note?: string | null;
 }) {
   const { lang } = useLang();
   const { noteByCode } = React.useContext(MetricCfgCtx);
-  const note = noteByCode[m.code] ?? null;
+  const note = noteProp !== undefined ? noteProp : (noteByCode[m.code] ?? null);
   const title = lang === 'en' && m.nameEn ? m.nameEn : m.nameAr;
   const completedLabel = lang === 'en' ? 'Completed' : 'منفذ';
   const activeLabel    = lang === 'en' ? 'In Progress' : 'قيد التنفيذ';
@@ -1273,13 +1280,14 @@ export default function PeriodicKpiReport() {
   }, [appliedFilters, buildKdParams]);
 
   // ── Open: metric drawer ──────────────────────────────────────────────────
-  const openMetricDrawer = useCallback(async (code: string, nameAr: string, nameEn: string | null, filter?: 'active' | 'completed' | 'all') => {
+  const openMetricDrawer = useCallback(async (code: string, nameAr: string, nameEn: string | null, filter?: 'active' | 'completed' | 'all', projectTypeOverride?: string) => {
     if (!appliedFilters) return;
     setMetricDrawer({ code, nameAr, nameEn, rows: [], loading: true });
     try {
       const p = buildKdParams(appliedFilters)!;
       p.set('metricCode', code);
       if (filter && filter !== 'all') p.set('filter', filter);
+      if (projectTypeOverride) p.set('projectType', projectTypeOverride);
       const res = await api.get(`/reports/periodic-kpis/kpi-alerts/metric-orders?${p}`);
       setMetricDrawer({ code, nameAr, nameEn, rows: res.data.rows ?? [], loading: false });
     } catch (e) {
@@ -2082,8 +2090,9 @@ export default function PeriodicKpiReport() {
 
             {/* Metrics averages — DATE_DIFF and NUMERIC_AGG */}
             {hasMetrics && (() => {
-              const dateDiff   = (summary.metricsAverages ?? []).filter(m => m.avgDays != null && m.metricType !== 'NUMERIC_AGG');
+              const dateDiff   = (summary.metricsAverages ?? []).filter(m => m.avgDays != null && m.metricType !== 'NUMERIC_AGG' && m.code !== 'EXECUTION');
               const numericAgg = (summary.metricsAverages ?? []).filter(m => m.avgDays != null && m.metricType === 'NUMERIC_AGG');
+              const ptExec     = (summary.ptExecAverages ?? []) as PtExecAverage[];
               return (
                 <div className="space-y-4">
                   {dateDiff.length > 0 && (
@@ -2109,6 +2118,36 @@ export default function PeriodicKpiReport() {
                           return (
                             <div key={m.code}>
                               <MetricCard m={m} onClick={() => openMetricDrawer(m.code, m.nameAr, m.nameEn ?? null)} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Per-project-type execution averages */}
+                  {ptExec.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
+                        <span className="text-xs font-semibold text-slate-500">{lang === 'en' ? 'Avg. Execution Days by Project Type' : 'متوسط أيام التنفيذ حسب نوع المشروع'}</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 items-stretch">
+                        {ptExec.map(pt => {
+                          if (!pt.canSplit) return null;
+                          const ptName  = pt.projectTypeLabelAr;
+                          const dUnit   = lang === 'en' ? 'd' : 'يوم';
+                          const ptNote  = lang === 'en'
+                            ? `From assignment date → proc. 155 close date within ${pt.slaDays} ${dUnit}`
+                            : `من تاريخ الإسناد إلى تاريخ إقفال إجراء 155 خلال ${pt.slaDays} ${dUnit}`;
+                          return (
+                            <div key={pt.projectTypeValue}>
+                              <DualMetricCard
+                                m={{ ...pt, nameAr: ptName }}
+                                note={ptNote}
+                                onClickCompleted={() => openMetricDrawer('EXECUTION', `${ptName} — ${lang === 'en' ? 'Completed' : 'منفذ'}`, null, 'completed', pt.projectTypeValue)}
+                                onClickActive={()    => openMetricDrawer('EXECUTION', `${ptName} — ${lang === 'en' ? 'In Progress' : 'قيد التنفيذ'}`, null, 'active',    pt.projectTypeValue)}
+                              />
                             </div>
                           );
                         })}

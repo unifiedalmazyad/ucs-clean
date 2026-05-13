@@ -829,6 +829,40 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
     });
     const metricsAverages = aggregateMetrics(wosForMetrics, metrics, stageMap, now, physicalKeyMap);
 
+    // Per-project-type execution averages (uses per-PT SLA as threshold)
+    const PT_ORDER = [
+      'تركيب العدادات (التوصيلات)',
+      'تنفيذ الجهد المنخفض',
+      'تنفيذ الجهد المتوسط',
+      'تنفيذ الإحلال',
+      'تنفيذ التعزيز',
+      'تنفيذ الربط',
+    ];
+    const execMetric = metrics.find((m: any) => m.code === 'EXECUTION' && m.isEnabled);
+    const ptExecAverages = execMetric
+      ? PT_ORDER
+          .filter(ptv => ruleMap.has(ptv))
+          .map(ptv => {
+            const rule = ruleMap.get(ptv)!;
+            const ptWOs = wosForMetrics.filter(
+              (wo: any) => (wo.projectType ?? (wo as any).project_type) === ptv,
+            );
+            const results = aggregateMetrics(
+              ptWOs,
+              [{ ...execMetric, useExecSla: true }],
+              stageMap,
+              now,
+              physicalKeyMap,
+              rule.slaDays,
+            );
+            const result = results[0];
+            return result
+              ? { ...result, projectTypeValue: ptv, projectTypeLabelAr: rule.projectTypeLabelAr ?? ptv, slaDays: rule.slaDays }
+              : null;
+          })
+          .filter(Boolean)
+      : [];
+
     // Build structured breakdown objects from the new counts fields.
     // These are informational only — card main values use the general-status fields above.
     const execBreakdown = {
@@ -851,6 +885,7 @@ router.get('/summary', authenticate, async (req: AuthRequest, res: Response) => 
       ...counts,
       avgDays: counts.daysCount > 0 ? Math.round(counts.totalDays / counts.daysCount) : null,
       metricsAverages,
+      ptExecAverages,
       billingCounts: computeBillingCounts(wos),
       finEnabled: finRule.isEnabled,
       finCounts: finCountsObj,
